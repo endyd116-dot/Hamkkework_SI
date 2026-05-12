@@ -15,6 +15,7 @@
 <link rel="stylesheet" href="assets/css/tokens.css?v=3">
 <link rel="stylesheet" href="assets/css/animations.css?v=3">
 <link rel="stylesheet" href="assets/css/admin.css?v=3">
+<link rel="stylesheet" href="assets/css/chatbot.css?v=1">
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
@@ -196,7 +197,7 @@
 <!-- ============================================================
      CHATBOT WIDGET — 운영자 모드 (auth.get() 있을 때 자동 활성화)
      ============================================================ -->
-<button class="chatbot-fab pulse-ring" id="chatbotFab" aria-label="AI 어시스턴트 열기" style="display:none">
+<button class="chatbot-fab" id="chatbotFab" aria-label="AI 어시스턴트 열기" style="display:none">
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
 </button>
 
@@ -235,13 +236,22 @@
 <script type="module" src="assets/js/admin.js"></script>
 <script type="module" src="assets/js/chatbot.js"></script>
 
-<!-- Show chatbot only when authenticated -->
+<!-- Show chatbot only when authenticated + auto-open on session start -->
 <script type="module">
   import { store } from './assets/js/store.js';
+  let autoOpenedThisSession = false;
   function syncChatbotVisibility() {
     const isAuthed = !!store.auth.get();
     const fab = document.getElementById('chatbotFab');
+    const panel = document.getElementById('chatbotPanel');
     if (fab) fab.style.display = isAuthed ? 'inline-flex' : 'none';
+
+    // 🤖 어드민 진입 시 챗봇 자동 열기 (세션당 1회) — 비서 AI가 처리 항목 자동 브리핑
+    if (isAuthed && !autoOpenedThisSession && fab && panel && !panel.classList.contains('open')) {
+      autoOpenedThisSession = true;
+      // chatbot.js wire() 가 DOMContentLoaded에 바인딩되므로 약간 지연
+      setTimeout(() => fab.click(), 400);
+    }
   }
   syncChatbotVisibility();
   window.addEventListener('storage', syncChatbotVisibility);
