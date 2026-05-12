@@ -12,9 +12,9 @@
 <link rel="preconnect" href="https://cdn.jsdelivr.net">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/[email protected]/dist/web/static/pretendard.css">
 
-<link rel="stylesheet" href="assets/css/tokens.css">
-<link rel="stylesheet" href="assets/css/animations.css">
-<link rel="stylesheet" href="assets/css/admin.css">
+<link rel="stylesheet" href="assets/css/tokens.css?v=3">
+<link rel="stylesheet" href="assets/css/animations.css?v=3">
+<link rel="stylesheet" href="assets/css/admin.css?v=3">
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
@@ -26,8 +26,8 @@
 <!-- Login screen (shown when not authenticated) -->
 <div id="loginShell" class="login-shell" style="display:none">
   <div class="login-card">
-    <div class="login-logo-wrap">
-      <img src="/assets/images/logo.jpg" alt="함께워크_SI" class="login-logo" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+    <div class="login-logo-wrap" style="display:flex;justify-content:center;margin-bottom:4px">
+      <img src="/assets/images/logo.jpg" alt="함께워크_SI" class="login-logo" width="140" height="140" style="width:140px;height:auto;max-width:140px;max-height:160px;object-fit:contain;display:block" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
       <div class="brand" style="display:none">
         <span class="brand-dot"></span>
         <span>함께워크_SI <span class="sidebar-brand-sub">Admin</span></span>
@@ -62,7 +62,7 @@
   <!-- Sidebar -->
   <aside class="sidebar" id="sidebar">
     <div class="sidebar-header">
-      <img src="/assets/images/logo.jpg" alt="함께워크_SI" class="sidebar-logo" onerror="this.style.display='none';this.nextElementSibling.style.display='inline-block'">
+      <img src="/assets/images/logo.jpg" alt="함께워크_SI" class="sidebar-logo" width="36" height="36" style="width:36px;height:36px;max-width:36px;max-height:36px;object-fit:contain;flex-shrink:0;background:var(--canvas);border-radius:var(--r-sm)" onerror="this.style.display='none';this.nextElementSibling.style.display='inline-block'">
       <span class="brand-dot" style="width:10px;height:10px;border-radius:50%;background:var(--cobalt);box-shadow:0 0 0 3px rgba(8,102,255,.16);flex-shrink:0;display:none"></span>
       <div>
         <div class="sidebar-brand">함께워크_SI</div>

@@ -44,8 +44,10 @@ body.admin {
   margin-bottom: 4px;
 }
 .login-logo {
-  width: 140px;
-  height: auto;
+  width: 140px !important;
+  height: auto !important;
+  max-width: 140px !important;
+  max-height: 160px !important;
   display: block;
   object-fit: contain;
 }
@@ -59,8 +61,10 @@ body.admin {
   margin-bottom: 14px;
 }
 .sidebar-logo {
-  width: 36px;
-  height: 36px;
+  width: 36px !important;
+  height: 36px !important;
+  max-width: 36px !important;
+  max-height: 36px !important;
   flex-shrink: 0;
   object-fit: contain;
   background: var(--canvas);

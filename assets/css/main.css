@@ -112,13 +112,15 @@ section {
   text-decoration: none;
 }
 .brand-logo {
-  height: 40px;
-  width: auto;
+  height: 40px !important;
+  width: auto !important;
+  max-height: 40px !important;
+  max-width: 180px !important;
   display: block;
   object-fit: contain;
 }
 @media (max-width: 720px) {
-  .brand-logo { height: 32px; }
+  .brand-logo { height: 32px !important; max-height: 32px !important; }
 }
 .brand-fallback {
   display: none;
@@ -138,9 +140,12 @@ section {
 
 /* Footer logo */
 .footer-logo {
-  height: 36px;
-  width: auto;
+  height: 36px !important;
+  width: auto !important;
+  max-height: 36px !important;
+  max-width: 160px !important;
   display: block;
+  object-fit: contain;
 }
 
 /* Chatbot avatar with logo */
