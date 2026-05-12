@@ -2,14 +2,14 @@
   "cases": [
     {
       "id": "tqms",
-      "client": "삼성전자 · 디지털플러스",
+      "client": "아워홈 (Ourhome) · 디지털클러스터사업",
       "label": "TQMS",
       "title": "TQMS 통합 품질관리 플랫폼.",
       "description": "원료 입고부터 생산·유통·판매까지 전 공정 품질 데이터를 통합 관리. CAPA 워크플로우 + LOT 추적 + 실시간 KPI.",
-      "tags": ["React", "Spring Boot", "Kafka"],
-      "amount": "10억 · 1순위",
+      "tags": ["React", "Spring Boot", "PostgreSQL", "Kafka"],
+      "amount": "10억 · 경쟁입찰 1위",
       "status": "경쟁입찰 수주",
-      "year": 2023,
+      "year": 2024,
       "published": true
     },
     {
@@ -174,7 +174,7 @@
       "slug": "si-pricing-truth",
       "title": "대기업 SI 견적, 왜 절반 가격이 가능할까?",
       "excerpt": "외주 0%, 풀스택 자체 팀. SI 견적의 60% 이상은 영업·관리·하청 마진이라는 불편한 진실.",
-      "author": "박단용",
+      "author": "박두용",
       "tags": ["SI", "가격", "비즈니스"],
       "published_at": "2026-04-12",
       "read_min": 6,
@@ -186,7 +186,7 @@
       "slug": "ai-agent-vs-chatbot",
       "title": "AI 에이전트 vs 챗봇 — 무엇이 다른가?",
       "excerpt": "단순 응답 챗봇으로는 운영 인력을 줄이지 못합니다. 진짜 \"에이전트\"의 정의와 ROI 계산법.",
-      "author": "장영주",
+      "author": "장석주",
       "tags": ["AI", "에이전트", "기술"],
       "published_at": "2026-04-28",
       "read_min": 8,
@@ -198,7 +198,7 @@
       "slug": "rfp-checklist-2026",
       "title": "2026년 RFP, 꼭 챙겨야 할 8가지 항목",
       "excerpt": "외주 발주 전 RFP에 반드시 포함해야 할 항목들. 추가금 분쟁의 80%는 RFP 누락에서 시작됩니다.",
-      "author": "박단용",
+      "author": "박두용",
       "tags": ["RFP", "발주", "가이드"],
       "published_at": "2026-05-02",
       "read_min": 10,
@@ -230,7 +230,7 @@
     },
     {
       "patterns": ["팀", "사람", "인력", "누구"],
-      "answer": "SI 전문기업 부장 출신 기획자(박단용) + 보안·플랫폼 풀스택 개발자(장영주). 둘 다 PM 경력. 외주 없이 핵심 인력 직접 작업. 대형 프로젝트 시 검증된 파트너 1~2명을 임시 합류.",
+      "answer": "SI 전문기업 부장 출신 기획자(박두용) + 보안·플랫폼 풀스택 개발자(장석주). 둘 다 PM 경력. 외주 없이 핵심 인력 직접 작업. 대형 프로젝트 시 검증된 파트너 1~2명을 임시 합류.",
       "links": [{ "label": "팀 보기", "href": "#team" }]
     },
     {
@@ -245,7 +245,7 @@
     },
     {
       "patterns": ["레퍼런스", "포트폴리오", "사례"],
-      "answer": "삼성전자 TQMS(10억), 신세계 LCMS(8억), 사회복지회(5억), 미래에셋 MaiMai, 국가과제 NFLUX, 합동참모본부 보안훈련 등 38억+ 대형 SI 레퍼런스가 있습니다.",
+      "answer": "아워홈 TQMS(10억, 1위), 신세계 LCMS(8억, 1위), 아워홈 밀케어(5억, 1위), 대한의사협회(5억, 1위), 미래에셋 MaiMai, 국가과제 NFLUX, 합동참모본부 보안훈련 등 38억+ 대형 SI 레퍼런스가 있습니다.",
       "links": [{ "label": "레퍼런스 보기", "href": "#cases" }]
     }
   ]

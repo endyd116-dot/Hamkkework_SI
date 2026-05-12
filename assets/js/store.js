@@ -80,9 +80,10 @@ export async function ensureSeed() {
     if (!read(KEYS.settings)) {
       write(KEYS.settings, {
         brand: '함께워크_SI',
-        email: 'endyd116@gmail.com',
+        email: 'endy116@naver.com',
         phone: '010-2807-5242',
-        pm: '박단용',
+        pm: '박두용',
+        dev: '장석주',
         invoice_terms: '30 / 40 / 30',
         warranty_months: 6,
       });

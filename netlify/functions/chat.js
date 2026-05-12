@@ -129,10 +129,12 @@ function buildSystemPrompt(context, extra) {
   const company = `
 ## 회사 소개
 - **브랜드**: ${settings.brand || '함께워크_SI'}
-- **연락처**: ${settings.email || 'endyd116@gmail.com'} / ${settings.phone || '010-2807-5242'}
-- **담당 PM**: ${settings.pm || '박단용'}
-- **팀 구성**: SI 전문기업 부장 출신 기획자(박단용) + 보안·플랫폼 풀스택 개발자(장영주), 2인 팀
-- **누적 수주**: 38억 원 이상의 대기업 SI 레퍼런스
+- **연락처**: ${settings.email || 'endy116@naver.com'} / ${settings.phone || '010-2807-5242'}
+- **담당 PM**: ${settings.pm || '박두용'} (前 액트베이스 전략기획부 부장 · 플레오 대표이사, 총 경력 14년)
+- **풀스택 개발자**: ${settings.dev || '장석주'} (보안·플랫폼·금융권 — Java/Spring, React, Python, AWS, PostgreSQL, Kafka)
+- **팀 구성**: SI 전문기업 부장 출신 기획자(박두용) + 보안·플랫폼 풀스택 개발자(장석주), 2인 팀
+- **누적 수주**: 38억 원 이상 (아워홈 TQMS 10억, 신세계 LCMS 8억, 아워홈 밀케어 5억, 대한의사협회 5억 등 경쟁입찰 1위 다수)
+- **채널**: 크몽 · 위시켓 · 직접 메일 문의 환영
 - **핵심 정체성**: 외주 0%, 자체 풀스택. 대기업 SI 표준 그대로, 절반 가격, AI Core 내장
 
 ## 핵심 약속
