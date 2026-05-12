@@ -144,6 +144,25 @@ export function bootCalculator() {
   loadRates();
   wireControls();
   render();
+
+  // 🤖 Allow chatbot agent to fill the calculator via custom event
+  window.addEventListener('calc:setState', (e) => {
+    const next = e.detail || {};
+    if (next.pages_simple != null) state.pages_simple = Number(next.pages_simple) || 0;
+    if (next.pages_complex != null) state.pages_complex = Number(next.pages_complex) || 0;
+    if (next.mod_basic != null) state.mod_basic = Number(next.mod_basic) || 0;
+    if (next.mod_advanced != null) state.mod_advanced = Number(next.mod_advanced) || 0;
+    if (next.integrations != null) state.integrations = Number(next.integrations) || 0;
+    if (next.ai) {
+      state.ai = { ...state.ai, ...next.ai };
+    }
+    // sync visible values
+    ['pages_simple', 'pages_complex', 'mod_basic', 'mod_advanced', 'integrations'].forEach((k) => {
+      const el = document.getElementById('val_' + k);
+      if (el) el.textContent = state[k];
+    });
+    render();
+  });
 }
 
 document.addEventListener('DOMContentLoaded', bootCalculator);

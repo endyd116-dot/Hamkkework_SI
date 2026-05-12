@@ -211,9 +211,12 @@ export function renderLeads() {
 }
 
 function kanbanCard(l) {
+  const aiBadge = l.aiSubmitted || l.source === 'chatbot-ai'
+    ? `<span style="display:inline-block;font-size:9px;font-weight:800;background:linear-gradient(135deg,#0866FF,#7AA8FF);color:#fff;padding:2px 6px;border-radius:999px;margin-left:6px;letter-spacing:0.04em" title="AI 챗봇이 자동 등록한 리드">🤖 AI</span>`
+    : '';
   return `
     <div class="kanban-card" draggable="true" data-id="${l.id}">
-      <div class="who">${escapeHtml(l.name || '—')}</div>
+      <div class="who">${escapeHtml(l.name || '—')}${aiBadge}</div>
       <div class="company">${escapeHtml(l.company || '')} ${l.email ? `· ${escapeHtml(l.email)}` : ''}</div>
       <div style="margin-top:8px;font-size:11px;color:var(--steel)">${escapeHtml(l.type || '')}</div>
       <div class="meta">
