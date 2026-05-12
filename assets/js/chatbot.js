@@ -123,9 +123,14 @@ function validateAction(action) {
     if (!data.name || !data.name.trim()) return '이름이 누락되었습니다';
     if (!data.email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(data.email))
       return '이메일 형식이 올바르지 않습니다';
-    if (leadCreatedInSession) return '이미 한 번 신청이 접수되었습니다 (세션당 1건 제한)';
-    const since = Date.now() - lastLeadAt;
-    if (since < 60 * 1000) return '60초 이내에 다시 신청할 수 없습니다';
+    // 운영자 모드에서는 rate limit 해제 (대량 리드 입력 가능)
+    const auth = store.auth.get();
+    const isAdmin = !!(auth && auth.email);
+    if (!isAdmin) {
+      if (leadCreatedInSession) return '이미 한 번 신청이 접수되었습니다 (세션당 1건 제한)';
+      const since = Date.now() - lastLeadAt;
+      if (since < 60 * 1000) return '60초 이내에 다시 신청할 수 없습니다';
+    }
   }
   if (tool === 'navigate') {
     const valid = ['hero', 'who', 'pain', 'promise', 'why', 'pricing', 'cases', 'process', 'team', 'faq', 'contact'];
@@ -469,9 +474,148 @@ async function executeAction(action) {
       };
     }
 
+    // ====================================================
+    // 9. request_pm_callback — PM 직접 연락 요청
+    // ====================================================
+    case 'request_pm_callback': {
+      if (!data.name || !data.contact || !data.method) {
+        return { ok: false, message: '이름·연락처·방법(phone/email/kakao)이 필요합니다' };
+      }
+      const methodKr = { phone: '📞 전화', email: '📨 이메일', kakao: '💬 카카오톡' }[data.method] || data.method;
+      const urgent = data.urgency === 'urgent';
+      const t = store.scheduledTasks.add({
+        type: 'callback_request',
+        leadName: data.name,
+        contact: data.contact,
+        method: data.method,
+        preferredTime: data.preferredTime || '',
+        topic: data.topic || '',
+        urgency: data.urgency || 'normal',
+        status: 'pending',
+        scheduledAt: urgent ? new Date(Date.now() + 30 * 60000).toISOString() : new Date().toISOString(),
+        sessionId,
+        aiSubmitted: true,
+      });
+      return {
+        ok: true,
+        message: `${data.name}님 PM 연락 요청 등록`,
+        card: {
+          icon: urgent ? '🚨' : '📞',
+          title: `PM 연락 요청 (${urgent ? 'URGENT' : 'NORMAL'})`,
+          rows: [
+            ['이름', data.name],
+            ['방법', methodKr],
+            ['연락처', data.contact],
+            data.preferredTime && ['선호 시간', data.preferredTime],
+            data.topic && ['주제', data.topic],
+          ].filter(Boolean),
+          footer: urgent ? '🚨 30분 이내 박두용 PM이 직접 연락드립니다.' : '✓ 박두용 PM에게 전달했습니다. 가능한 시간대에 연락드리겠습니다.',
+          tone: 'success',
+        },
+      };
+    }
+
+    // ====================================================
+    // 운영자 전용 도구 (어드민 모드에서만 의미 있음)
+    // ====================================================
+
+    case 'list_callback_requests': {
+      const status = data.status || 'pending';
+      const tasks = store.scheduledTasks.all()
+        .filter((t) => t.type === 'callback_request' && t.status === status);
+      return {
+        ok: true,
+        message: `${tasks.length}건의 ${status === 'pending' ? '처리 대기' : '완료된'} 연락 요청`,
+        card: {
+          icon: '📋',
+          title: `${status === 'pending' ? '처리 대기' : '완료'} 연락 요청 (${tasks.length}건)`,
+          rows: tasks.length === 0
+            ? [['상태', '없음']]
+            : tasks.slice(0, 10).map((t) => [
+                `${t.leadName} (${t.urgency === 'urgent' ? '🚨' : '·'})`,
+                `${t.method === 'phone' ? '📞' : t.method === 'email' ? '📨' : '💬'} ${t.contact} · ${t.topic || '주제 없음'}`,
+              ]),
+          footer: '어드민 대시보드에서 [지금 발송] 또는 [취소] 클릭 가능',
+          tone: 'info',
+        },
+      };
+    }
+
+    case 'mark_task_done': {
+      const t = store.scheduledTasks.byId(data.taskId);
+      if (!t) return { ok: false, message: '해당 작업을 찾을 수 없습니다' };
+      store.scheduledTasks.update(data.taskId, {
+        status: 'done',
+        resolvedAt: utils.nowIso(),
+        resolveNote: data.note || '',
+      });
+      return {
+        ok: true,
+        message: `작업 처리 완료 (${t.leadName || t.subject || data.taskId})`,
+        card: {
+          icon: '✅',
+          title: '처리 완료',
+          rows: [
+            ['작업', t.type],
+            ['대상', t.leadName || t.leadEmail || '-'],
+            data.note && ['메모', data.note],
+          ].filter(Boolean),
+          tone: 'success',
+        },
+      };
+    }
+
+    case 'summarize_chat': {
+      const log = store.chatLogs.all().find((l) => l.sessionId === data.sessionId);
+      if (!log) return { ok: false, message: `세션 ${data.sessionId}를 찾을 수 없습니다` };
+      return {
+        ok: true,
+        message: `세션 ${data.sessionId} 요약`,
+        card: {
+          icon: '💬',
+          title: `대화 요약: ${data.sessionId}`,
+          rows: [
+            ['시작', fmtDate(log.messages?.[0]?.at)],
+            ['메시지 수', `${log.messages?.length || 0}건`],
+            ['최근 사용자 메시지', (log.messages || []).filter((m) => m.role === 'user').slice(-1)[0]?.text?.slice(0, 120) || '-'],
+          ],
+          footer: '※ AI가 위 데이터를 기반으로 요약을 답변 본문에 작성합니다.',
+          tone: 'info',
+        },
+      };
+    }
+
+    case 'update_lead_stage': {
+      const lead = store.leads.byId(data.leadId);
+      if (!lead) return { ok: false, message: '리드를 찾을 수 없습니다' };
+      const valid = ['new', 'consult', 'quote', 'contract', 'won', 'lost'];
+      if (!valid.includes(data.stage)) return { ok: false, message: '잘못된 단계 값' };
+      store.leads.update(data.leadId, { status: data.stage });
+      return {
+        ok: true,
+        message: `${lead.name} → ${data.stage}로 이동`,
+        card: {
+          icon: '🔀',
+          title: '리드 단계 변경',
+          rows: [
+            ['리드', lead.name],
+            ['이전', lead.status],
+            ['변경', data.stage],
+          ],
+          tone: 'success',
+        },
+      };
+    }
+
     default:
       return { ok: false, message: `알 수 없는 도구: ${tool}` };
   }
+}
+
+function fmtDate(iso) {
+  if (!iso) return '-';
+  try { return new Date(iso).toLocaleString('ko-KR', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }); }
+  catch { return iso; }
 }
 
 /** Render a tool-result card in the chatbot panel */
@@ -514,6 +658,9 @@ function renderActionCard(card) {
    Gemini call via Netlify Function
    ============================================================ */
 async function askGemini() {
+  const auth = store.auth.get();  // 어드민 로그인 상태면 운영자 모드
+  const isAdmin = !!(auth && auth.email);
+
   const context = {
     cases: store.cases.all(),
     faqs: store.faqs.all(),
@@ -524,6 +671,21 @@ async function askGemini() {
     })),
   };
 
+  // 운영자 모드일 때만 민감 데이터 컨텍스트 추가
+  if (isAdmin) {
+    context.chatLogs = store.chatLogs.all().map((l) => ({
+      sessionId: l.sessionId,
+      updatedAt: l.updatedAt,
+      messages: (l.messages || []).slice(-8),
+    }));
+    context.leads = store.leads.all().map((l) => ({
+      id: l.id, name: l.name, email: l.email, company: l.company,
+      type: l.type, budget: l.budget, status: l.status, source: l.source,
+      createdAt: l.createdAt,
+    }));
+    context.scheduledTasks = store.scheduledTasks.all();
+  }
+
   const cfg = store.chatConfig.get();
   const systemPromptExtra = cfg.systemPromptExtra || '';
   const messages = conversation.map((m) => ({ role: m.role, text: m.text }));
@@ -531,7 +693,7 @@ async function askGemini() {
   const r = await fetch('/api/chat', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ messages, context, systemPromptExtra, sessionId }),
+    body: JSON.stringify({ messages, context, systemPromptExtra, sessionId, auth }),
   });
   if (!r.ok) {
     const body = await r.text().catch(() => '');
@@ -655,9 +817,36 @@ function openPanel() {
   fab.style.display = 'none';
   isOpen = true;
   if (body.children.length === 0) {
-    const cfg = store.chatConfig.get();
-    const greet = cfg.greeting ||
-      '안녕하세요! 함께워크_SI AI 에이전트입니다. 질문도 좋고, "대신 상담 신청해줘" 식으로 부탁하셔도 됩니다.';
+    const auth = store.auth.get();
+    const isAdmin = !!(auth && auth.email);
+    let greet;
+
+    if (isAdmin) {
+      // 🔑 운영자 모드 인사 — 처리 필요 항목 자동 요약
+      const tasks = store.scheduledTasks.all();
+      const callbacks = tasks.filter((t) => t.type === 'callback_request' && t.status === 'pending');
+      const urgentCallbacks = callbacks.filter((t) => t.urgency === 'urgent').length;
+      const followups = tasks.filter((t) => t.type === 'followup_email' && t.status === 'pending');
+      const dueFollowups = followups.filter((t) => new Date(t.scheduledAt).getTime() <= Date.now()).length;
+      const newLeads = store.leads.all().filter((l) => l.status === 'new').length;
+
+      greet = `안녕하세요 ${auth.name || auth.email} 님 👋\n\n오늘 처리 필요 항목:\n` +
+        `📞 PM 통화 요청 **${callbacks.length}건** ${urgentCallbacks ? `(🚨 긴급 ${urgentCallbacks}건)` : ''}\n` +
+        `📨 발송 가능 follow-up **${dueFollowups}건** (대기 ${followups.length - dueFollowups}건)\n` +
+        `🔔 신규 리드 **${newLeads}건**\n\n` +
+        `"오늘 통화 요청 보여줘", "김민수 대화 요약해줘", "신규 리드 모두 상담 단계로 이동해줘" 같이 요청하세요.`;
+
+      // 챗봇 헤더에 운영자 모드 표시
+      const statusEl = panel.querySelector('.chatbot-header .status');
+      if (statusEl) statusEl.textContent = '🔑 운영자 모드 · Gemini 3.0 Flash';
+      const nameEl = panel.querySelector('.chatbot-header .name');
+      if (nameEl) nameEl.textContent = `${auth.name || '운영자'} 어시스턴트`;
+    } else {
+      const cfg = store.chatConfig.get();
+      greet = cfg.greeting ||
+        '안녕하세요! 함께워크_SI AI 에이전트입니다. 질문도 좋고, "대신 상담 신청해줘" 식으로 부탁하셔도 됩니다.';
+    }
+
     bubble(greet, 'bot');
     conversation.push({ role: 'bot', text: greet, at: utils.nowIso() });
   }

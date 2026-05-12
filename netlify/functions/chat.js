@@ -37,7 +37,8 @@ export const handler = async (event) => {
   try { payload = JSON.parse(event.body || '{}'); }
   catch { return resp(400, { error: 'Invalid JSON' }); }
 
-  const { messages = [], context = {}, systemPromptExtra = '' } = payload;
+  const { messages = [], context = {}, systemPromptExtra = '', auth = null } = payload;
+  const isAdmin = !!(auth && auth.email);  // 운영자 모드 플래그
   if (!Array.isArray(messages) || messages.length === 0) {
     return resp(400, { error: 'messages array required' });
   }
@@ -46,7 +47,7 @@ export const handler = async (event) => {
     return resp(400, { error: 'Last message must be a non-empty user message' });
   }
 
-  const system = buildSystemPrompt(context, systemPromptExtra);
+  const system = buildSystemPrompt(context, systemPromptExtra, { isAdmin, auth });
 
   // Convert internal {role, text} → Gemini {role, parts}
   const contents = messages
@@ -123,8 +124,12 @@ export const handler = async (event) => {
 /* ============================================================
    System prompt — builds comprehensive RAG context
    ============================================================ */
-function buildSystemPrompt(context, extra) {
-  const { cases = [], faqs = [], pricing = {}, settings = {}, posts = [] } = context;
+function buildSystemPrompt(context, extra, mode = {}) {
+  const { isAdmin = false, auth = null } = mode;
+  const {
+    cases = [], faqs = [], pricing = {}, settings = {}, posts = [],
+    chatLogs = [], leads = [], scheduledTasks = [],
+  } = context;
 
   const company = `
 ## 회사 소개
@@ -373,6 +378,31 @@ ${posts.filter((p) => p.published !== false).slice(0, 10).map((p) => `- **${p.ti
 }}
 \`\`\`
 
+---
+
+### 도구 9: \`request_pm_callback\` — 박두용 PM 직접 연락 요청
+
+**언제 호출**: 사용자가 "박두용 PM에게 직접 통화하고 싶어요", "전화로 통화 원해요", "직접 메일 회신 받고 싶어요", "카톡으로 연락해주세요" 같은 명시적 PM 연락 요청.
+
+**필수 정보**: \`name\` (이름) + \`contact\` (연락처: 전화·이메일·카톡ID 중 하나) + \`method\` ('phone' | 'email' | 'kakao')
+**선택 정보**: \`preferredTime\` (선호 시간), \`topic\` (대화 주제), \`urgency\` ('normal' | 'urgent')
+
+**예시**:
+\`\`\`action
+{ "tool": "request_pm_callback", "data": {
+  "name": "김민수",
+  "contact": "010-1234-5678",
+  "method": "phone",
+  "preferredTime": "평일 오후 2-5시",
+  "topic": "ABC 쇼핑몰 견적 상세 협의",
+  "urgency": "normal"
+}}
+\`\`\`
+
+**호출 후 사용자에게**: "✅ 박두용 PM에게 통화 요청을 전달했습니다. 평일 오후 2-5시에 010-1234-5678로 연락드릴 수 있도록 메모를 남겼어요. (urgent일 경우 30분 이내 연락)"
+
+**우선순위 규칙**: 사용자가 "급해요", "당장", "최대한 빨리" 같은 표현을 사용하면 \`urgency: "urgent"\`로.
+
 ## 🛡 도구 호출 규칙
 
 1. **명시적 요청 시에만 호출**: 사용자가 직접 "신청해줘"/"등록해줘"/"보여줘" 같은 요청을 했을 때만 호출.
@@ -385,7 +415,75 @@ ${posts.filter((p) => p.published !== false).slice(0, 10).map((p) => `- **${p.ti
 
   const extraSection = extra ? `\n## 추가 지침 (관리자 설정)\n${extra}\n` : '';
 
-  return `당신은 함께워크_SI의 공식 AI 상담 에이전트입니다. 회사·가격·레퍼런스 정보를 숙지하고, 단순 답변뿐 아니라 **사용자를 위해 직접 행동(도구 호출)** 할 수 있습니다.
+  // ============================================================
+  // 운영자(어드민) 모드 — 박두용 PM이 로그인했을 때만 활성화
+  // ============================================================
+  const adminSection = !isAdmin ? '' : `
+---
+
+# 🔑 운영자 모드 (Admin Console) — 박두용 PM 전용
+
+당신은 지금 **${auth?.name || '박두용 PM'}(${auth?.email || ''})** 와 대화하고 있습니다. 일반 고객이 아닌 **운영자**입니다.
+
+운영자 모드에서는:
+- 일반 고객용 응대 톤이 아니라 **간결한 동료 톤**으로 답변 (예: "OK, 처리했어요" / "오늘 핫리드 3건 있어요")
+- 더 많은 도구와 더 많은 데이터에 접근 가능
+- \`create_lead\` 세션당 1회 제한 해제 (대량 입력 가능)
+- 사용자가 누구인지 묻거나 회사 정보를 묻는 일 없음 — 이미 알고 있다고 가정
+
+## 📊 현재 운영 데이터 (실시간 컨텍스트)
+
+### 챗봇 대화 로그 (최근 ${chatLogs.length}건)
+${chatLogs.slice(-15).map((l) => `
+**Session ${l.sessionId}** (${l.updatedAt})
+${(l.messages || []).slice(-6).map((m) => `${m.role === 'user' ? '👤 고객' : '🤖 봇'}: ${(m.text || '').slice(0, 200)}`).join('\n')}
+`).join('\n---\n')}
+
+### 리드 현황 (${leads.length}건)
+${leads.slice(-20).map((l) => `- **${l.name}** | ${l.email || '-'} | ${l.type} | ${l.budget} | 상태: ${l.status} | ${l.source === 'chatbot-ai' ? '🤖 AI 등록' : ''}`).join('\n')}
+
+### 예약 작업 큐 (${scheduledTasks.length}건)
+${scheduledTasks.slice(0, 15).map((t) => `- [${t.type}] ${t.leadName || t.leadEmail} | ${t.subject || t.topic || ''} | 예약: ${t.scheduledAt || '즉시'} | 상태: ${t.status}`).join('\n')}
+
+## 🛠 운영자 전용 추가 도구
+
+### 도구 A1: \`list_callback_requests\` — 처리 필요한 연락 요청 조회
+
+호출 시 모든 \`callback_request\` 타입 작업을 표시합니다.
+
+\`\`\`action
+{ "tool": "list_callback_requests", "data": { "status": "pending" } }
+\`\`\`
+
+### 도구 A2: \`mark_task_done\` — 작업 처리 완료 표시
+
+\`\`\`action
+{ "tool": "mark_task_done", "data": { "taskId": "task_xxx", "note": "전화 통화 완료" } }
+\`\`\`
+
+### 도구 A3: \`summarize_chat\` — 특정 세션 대화 요약
+
+\`\`\`action
+{ "tool": "summarize_chat", "data": { "sessionId": "sxxxxx" } }
+\`\`\`
+
+### 도구 A4: \`update_lead_stage\` — 리드 단계 이동
+
+\`\`\`action
+{ "tool": "update_lead_stage", "data": { "leadId": "lead_xxx", "stage": "consult" } }
+\`\`\`
+
+stage: new / consult / quote / contract / won / lost
+
+## 📌 운영자 모드 시작 인사
+
+대화 시작 시 아래처럼 짧고 명확하게:
+- "안녕하세요 박두용님. 오늘 처리 필요한 항목: 📞 통화 요청 N건 · 📨 follow-up 발송 가능 M건 · 🔔 새 리드 K건."
+
+질문 받으면 핵심만 답변. 운영자에게 회사 소개나 영업 톤은 불필요.
+`;
+
+  return `당신은 함께워크_SI의 공식 AI ${isAdmin ? '**운영자 어시스턴트**' : '상담 에이전트'}입니다.
 
 ${company}
 ${pricingTable}
@@ -394,10 +492,11 @@ ${faqList}
 ${blogList}
 ${processStr}
 ${tools}
+${adminSection}
 ${guide}
 ${extraSection}
 
-이제 위의 정보와 도구를 활용해 사용자의 요청에 답하세요. 사용자가 "대신 해줘"라고 요청하면 적극적으로 도구를 호출해 직접 처리하세요. 정보에 없는 내용은 추측하지 말고 상담 미팅으로 유도하세요.`;
+이제 위의 정보와 도구를 활용해 ${isAdmin ? '운영자 작업을 효율적으로 도와' : '사용자의 요청에 답하'}세요. ${isAdmin ? '간결하고 빠르게 답변하세요.' : '사용자가 "대신 해줘"라고 요청하면 적극적으로 도구를 호출해 직접 처리하세요. 정보에 없는 내용은 추측하지 말고 상담 미팅으로 유도하세요.'}`;
 }
 
 function collapseTurns(contents) {

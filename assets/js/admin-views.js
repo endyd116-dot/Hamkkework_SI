@@ -83,42 +83,79 @@ export function renderDashboard() {
     </div>
 
     ${(() => {
-      const tasks = store.scheduledTasks.all().filter(t => t.status === 'pending');
+      const allTasks = store.scheduledTasks.all().filter(t => t.status === 'pending');
+      const callbacks = allTasks.filter(t => t.type === 'callback_request');
+      const followups = allTasks.filter(t => t.type === 'followup_email');
       const now = Date.now();
-      const due = tasks.filter(t => new Date(t.scheduledAt).getTime() <= now);
-      const upcoming = tasks.filter(t => new Date(t.scheduledAt).getTime() > now);
-      if (!tasks.length) return '';
-      return `
-        <div class="adm-card">
-          <h3>🤖 AI 예약 작업 큐
-            <span style="font-size:11px;font-weight:400;color:var(--steel)">${due.length}건 발송 가능 · ${upcoming.length}건 대기</span>
-          </h3>
-          <div class="desc">AI 챗봇이 예약한 follow-up 메일입니다. 시간 도래 시 [지금 발송] 또는 [취소] 클릭.</div>
-          <table class="adm-table">
-            <thead><tr><th>수신</th><th>제목</th><th>예약일</th><th>상태</th><th></th></tr></thead>
-            <tbody>${tasks.map(t => {
-              const isDue = new Date(t.scheduledAt).getTime() <= now;
-              return `
-                <tr ${isDue ? 'style="background:var(--warning-soft)"' : ''}>
-                  <td>
-                    <b>${escapeHtml(t.leadName || '—')}</b>
-                    <div style="font-size:11px;color:var(--steel)">${escapeHtml(t.leadEmail || '')}</div>
-                  </td>
-                  <td style="font-size:13px">${escapeHtml(t.subject || '')}</td>
-                  <td style="font-size:12px;color:var(--steel)">${fmt.date(t.scheduledAt)}</td>
-                  <td>${isDue
-                    ? '<span class="tag warning">발송 가능</span>'
-                    : '<span class="tag info">⏰ 대기</span>'}</td>
-                  <td>
-                    ${isDue ? `<button class="adm-btn sm" data-action="send-task" data-id="${t.id}">지금 발송</button>` : ''}
-                    <button class="adm-btn sm ghost" data-action="cancel-task" data-id="${t.id}">취소</button>
-                  </td>
-                </tr>
-              `;
-            }).join('')}</tbody>
-          </table>
-        </div>
-      `;
+
+      // 🔔 PM 통화 요청 (가장 중요 — 챗봇이 자동 등록)
+      let html = '';
+      if (callbacks.length > 0) {
+        const urgent = callbacks.filter(t => t.urgency === 'urgent');
+        html += `
+          <div class="adm-card" style="border-left:4px solid var(--cobalt);background:linear-gradient(90deg,var(--cobalt-softer),var(--canvas) 30%)">
+            <h3>🔔 PM 직접 연락 요청 <span style="font-size:11px;font-weight:400;color:var(--steel)">${callbacks.length}건 · 🚨 긴급 ${urgent.length}건</span></h3>
+            <div class="desc">메인페이지 챗봇 대화 중 고객이 박두용 PM의 직접 연락을 요청한 건입니다. AI가 자동 등록.</div>
+            <table class="adm-table">
+              <thead><tr><th>요청자</th><th>연락 방법</th><th>주제</th><th>긴급도</th><th>요청 시각</th><th></th></tr></thead>
+              <tbody>${callbacks.map(t => {
+                const method = t.method === 'phone' ? '📞 전화' : t.method === 'email' ? '📨 이메일' : t.method === 'kakao' ? '💬 카톡' : t.method;
+                const urg = t.urgency === 'urgent';
+                return `
+                  <tr ${urg ? 'style="background:var(--critical-soft)"' : ''}>
+                    <td>
+                      <b>${escapeHtml(t.leadName || '—')}</b>
+                      <div style="font-size:11px;color:var(--steel)">세션: ${escapeHtml((t.sessionId || '').slice(-8))}</div>
+                    </td>
+                    <td style="font-size:13px">${method}<br><span style="color:var(--cobalt-deep);font-weight:600">${escapeHtml(t.contact || '')}</span></td>
+                    <td style="font-size:13px">${escapeHtml(t.topic || '주제 미명시')}<div style="font-size:11px;color:var(--steel);margin-top:2px">선호 시간: ${escapeHtml(t.preferredTime || '-')}</div></td>
+                    <td>${urg ? '<span class="tag critical">🚨 URGENT</span>' : '<span class="tag info">일반</span>'}</td>
+                    <td style="font-size:12px;color:var(--steel)">${fmt.rel(t.createdAt)}</td>
+                    <td>
+                      ${t.method === 'phone' ? `<a class="adm-btn sm" href="tel:${escapeHtml(t.contact)}">📞 전화</a>` : ''}
+                      ${t.method === 'email' ? `<a class="adm-btn sm" href="mailto:${escapeHtml(t.contact)}?subject=${encodeURIComponent('[함께워크_SI] ' + (t.topic || '연락드립니다'))}">📨 메일</a>` : ''}
+                      <button class="adm-btn sm secondary" data-action="resolve-callback" data-id="${t.id}">처리완료</button>
+                      <button class="adm-btn sm ghost" data-action="cancel-task" data-id="${t.id}">삭제</button>
+                    </td>
+                  </tr>
+                `;
+              }).join('')}</tbody>
+            </table>
+          </div>
+        `;
+      }
+
+      // 📨 Follow-up 큐 (별도 카드)
+      if (followups.length > 0) {
+        const due = followups.filter(t => new Date(t.scheduledAt).getTime() <= now);
+        html += `
+          <div class="adm-card">
+            <h3>📨 AI 예약 follow-up 메일
+              <span style="font-size:11px;font-weight:400;color:var(--steel)">${due.length}건 발송 가능 · ${followups.length - due.length}건 대기</span>
+            </h3>
+            <div class="desc">AI 챗봇이 예약한 follow-up 메일입니다. 시간 도래 시 [지금 발송] 클릭.</div>
+            <table class="adm-table">
+              <thead><tr><th>수신</th><th>제목</th><th>예약일</th><th>상태</th><th></th></tr></thead>
+              <tbody>${followups.map(t => {
+                const isDue = new Date(t.scheduledAt).getTime() <= now;
+                return `
+                  <tr ${isDue ? 'style="background:var(--warning-soft)"' : ''}>
+                    <td><b>${escapeHtml(t.leadName || '—')}</b><div style="font-size:11px;color:var(--steel)">${escapeHtml(t.leadEmail || '')}</div></td>
+                    <td style="font-size:13px">${escapeHtml(t.subject || '')}</td>
+                    <td style="font-size:12px;color:var(--steel)">${fmt.date(t.scheduledAt)}</td>
+                    <td>${isDue ? '<span class="tag warning">발송 가능</span>' : '<span class="tag info">⏰ 대기</span>'}</td>
+                    <td>
+                      ${isDue ? `<button class="adm-btn sm" data-action="send-task" data-id="${t.id}">지금 발송</button>` : ''}
+                      <button class="adm-btn sm ghost" data-action="cancel-task" data-id="${t.id}">취소</button>
+                    </td>
+                  </tr>
+                `;
+              }).join('')}</tbody>
+            </table>
+          </div>
+        `;
+      }
+      return html;
     })()}
 
     <div class="adm-card">
@@ -235,9 +272,24 @@ export function mountDashboard() {
   $$('[data-action="cancel-task"]').forEach((btn) => {
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
-      if (!window.confirm('예약된 follow-up을 취소할까요?')) return;
+      if (!window.confirm('해당 작업을 취소할까요?')) return;
       store.scheduledTasks.remove(btn.dataset.id);
-      toast('예약이 취소되었습니다');
+      toast('취소되었습니다');
+      window.rerenderView?.();
+    });
+  });
+
+  // 🔔 PM 통화 요청 처리 완료
+  $$('[data-action="resolve-callback"]').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const note = window.prompt('처리 메모를 입력하세요 (선택):', '');
+      store.scheduledTasks.update(btn.dataset.id, {
+        status: 'done',
+        resolvedAt: utils.nowIso(),
+        resolveNote: note || '',
+      });
+      toast('처리 완료로 표시했습니다', 'success');
       window.rerenderView?.();
     });
   });
