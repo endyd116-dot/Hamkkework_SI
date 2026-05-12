@@ -8,7 +8,14 @@
       "Bash(node .tmp-compress.mjs)",
       "Bash(node --check netlify/functions/chat.js)",
       "Bash(node --check assets/js/admin-views.js)",
-      "Bash(git -c user.email=\"endy116@naver.com\" -c user.name=\"Park Duyong\" commit -m \"perf: Top 4+7+11 적용 - 시스템 프롬프트 -40% 압축 + 인메모리 LRU 캐시 + 일일 비용 추세/어뷰즈 감지\")"
+      "Bash(git -c user.email=\"endy116@naver.com\" -c user.name=\"Park Duyong\" commit -m \"perf: Top 4+7+11 적용 - 시스템 프롬프트 -40% 압축 + 인메모리 LRU 캐시 + 일일 비용 추세/어뷰즈 감지\")",
+      "Bash(ls \"c:/Users/Administrator/.claude/projects/c--Users-Administrator-Desktop----dev-HamkkeWorkSi/memory\" 2>&1 || mkdir -p \"c:/Users/Administrator/.claude/projects/c--Users-Administrator-Desktop----dev-HamkkeWorkSi/memory\")",
+      "Bash(mkdir -p \"c:/Users/Administrator/.claude/projects/c--Users-Administrator-Desktop----dev-HamkkeWorkSi/memory\" && ls -la \"c:/Users/Administrator/.claude/projects/c--Users-Administrator-Desktop----dev-HamkkeWorkSi/memory\")",
+      "Bash(git -c user.email=\"endy116@naver.com\" -c user.name=\"Park Duyong\" commit -m \"docs: 인수인계 문서 HANDOFF.md 추가 — 새 세션에서 즉시 컨텍스트 복원 가능\")"
+    ],
+    "additionalDirectories": [
+      "c:\\Users\\Administrator\\.claude\\projects\\c--Users-Administrator-Desktop----dev-HamkkeWorkSi",
+      "c:\\Users\\Administrator\\.claude\\projects\\c--Users-Administrator-Desktop----dev-HamkkeWorkSi\\memory"
     ]
   }
 }
