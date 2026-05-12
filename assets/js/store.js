@@ -25,6 +25,7 @@ const KEYS = {
   settings: `${NS}.settings`,
   pricing: `${NS}.pricing`,
   scheduledTasks: `${NS}.scheduledTasks`,
+  usageLog: `${NS}.usageLog`,
   auth: `${NS}.auth`,
   theme: `${NS}.theme`,
 };
@@ -146,6 +147,7 @@ export const store = {
   automations: collection(KEYS.automations),
   chatLogs: collection(KEYS.chatLogs),
   scheduledTasks: collection(KEYS.scheduledTasks),
+  usageLog: collection(KEYS.usageLog),
 
   pricing: {
     get: () => read(KEYS.pricing, {}),

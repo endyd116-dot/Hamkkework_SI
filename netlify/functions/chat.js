@@ -1,26 +1,77 @@
 /**
- * POST /api/chat
+ * POST /api/chat — Cost-optimized Gemini with smart model routing.
  *
- * Gemini-powered chatbot with full platform context (RAG via context injection).
+ * ROUTING STRATEGY (saves cost):
+ *   - Admin mode               → FLASH (reasoning over chatLogs)
+ *   - Complex intent keywords  → FLASH (multi-param tool calls)
+ *   - Long conversation (>6)   → FLASH (context understanding)
+ *   - Everything else          → LITE  (cheap & fast)
  *
- * Environment variables (set in Netlify dashboard or via CLI):
- *   GEMINI_API_KEY    — required. Google AI Studio API key.
- *   GEMINI_MODEL      — optional. Default: gemini-3.0-flash
- *                       Alternatives: gemini-3.0-pro, gemini-2.5-flash, gemini-1.5-flash
+ * TOKEN CAPS (per response):
+ *   - Lite (simple)            → 400 tokens
+ *   - Flash (complex)          → 800 tokens
+ *   - Admin mode               → 1024 tokens
  *
- * Request body:
- *   {
- *     messages: [{ role: 'user'|'bot', text: '...' }, ...]   // full conversation
- *     context: {                                              // current platform state
- *       cases: [...], faqs: [...], pricing: {...}, settings: {...}, posts: [...]
- *     },
- *     systemPromptExtra?: string                              // admin-editable additions
- *   }
+ * COST MONITORING:
+ *   - Response includes { model, tokens, cost_usd_estimate }
+ *   - Client accumulates to store.usageLog
+ *   - Admin dashboard shows monthly progress vs $50 budget
  *
- * Response: { answer: string, model: string, tokens: { in, out } }
+ * Environment variables:
+ *   GEMINI_API_KEY              required
+ *   GEMINI_MODEL_FLASH          default: gemini-2.5-flash
+ *   GEMINI_MODEL_LITE           default: gemini-3.1-flash-lite
+ *   GEMINI_PRICE_FLASH_IN       default: 0.30 (USD per 1M input tokens)
+ *   GEMINI_PRICE_FLASH_OUT      default: 2.50
+ *   GEMINI_PRICE_LITE_IN        default: 0.10
+ *   GEMINI_PRICE_LITE_OUT       default: 0.40
+ *   GEMINI_MONTHLY_BUDGET_USD   default: 50 (informational only)
  */
 
-const DEFAULT_MODEL = 'gemini-3.0-flash';
+const MODEL_FLASH = process.env.GEMINI_MODEL_FLASH || 'gemini-2.5-flash';
+const MODEL_LITE  = process.env.GEMINI_MODEL_LITE  || 'gemini-3.1-flash-lite';
+
+// USD per 1,000,000 tokens — override via env if pricing changes
+const PRICING = {
+  [MODEL_FLASH]: {
+    in:  Number(process.env.GEMINI_PRICE_FLASH_IN  || 0.30),
+    out: Number(process.env.GEMINI_PRICE_FLASH_OUT || 2.50),
+  },
+  [MODEL_LITE]: {
+    in:  Number(process.env.GEMINI_PRICE_LITE_IN   || 0.10),
+    out: Number(process.env.GEMINI_PRICE_LITE_OUT  || 0.40),
+  },
+};
+
+const COMPLEX_KEYWORDS = [
+  '신청', '등록해', '작성해', '만들어', '추가해',
+  '분석', '요약', '초안', '견적서', '제안서',
+  'PM', '박두용', '통화 요청', '연락 받', '연락받',
+  '카톡', '메일 보내', '발송', '예약', '리드',
+  'create', 'analyze', 'summarize',
+];
+
+/** Route to Flash if reasoning is needed, else Lite */
+function selectModel({ isAdmin, lastText, conversationLength }) {
+  if (isAdmin) return MODEL_FLASH;                      // 운영자: 추론 필수
+  if (conversationLength > 6) return MODEL_FLASH;       // 긴 대화: 컨텍스트 이해
+  const text = (lastText || '').toLowerCase();
+  if (COMPLEX_KEYWORDS.some((k) => text.includes(k.toLowerCase()))) return MODEL_FLASH;
+  return MODEL_LITE;                                    // 단순 응대: 저렴
+}
+
+function maxTokensFor({ isAdmin, model }) {
+  if (isAdmin) return 1024;
+  return model === MODEL_FLASH ? 800 : 400;
+}
+
+function estimateCostUsd(model, usage) {
+  const p = PRICING[model];
+  if (!p || !usage) return 0;
+  const inCost  = (usage.promptTokenCount     || 0) * p.in  / 1_000_000;
+  const outCost = (usage.candidatesTokenCount || 0) * p.out / 1_000_000;
+  return inCost + outCost;
+}
 
 export const handler = async (event) => {
   if (event.httpMethod !== 'POST') {
@@ -60,7 +111,13 @@ export const handler = async (event) => {
   // Collapse consecutive same-role turns (Gemini requires alternating)
   const collapsed = collapseTurns(contents);
 
-  const model = process.env.GEMINI_MODEL || DEFAULT_MODEL;
+  // 🎯 Smart model routing — Flash for complex, Lite for simple
+  const model = selectModel({
+    isAdmin,
+    lastText: last.text,
+    conversationLength: messages.length,
+  });
+  const maxOutputTokens = maxTokensFor({ isAdmin, model });
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
 
   let r;
@@ -78,7 +135,7 @@ export const handler = async (event) => {
           temperature: 0.4,
           topK: 40,
           topP: 0.95,
-          maxOutputTokens: 1024,
+          maxOutputTokens,            // 동적 토큰 캡 (Lite=400 / Flash=800 / Admin=1024)
           responseMimeType: 'text/plain',
         },
         safetySettings: [
@@ -109,15 +166,25 @@ export const handler = async (event) => {
     cand?.content?.parts?.map((p) => p.text).filter(Boolean).join('\n') ||
     '죄송합니다. 응답을 생성하지 못했습니다. 다시 시도해 주세요.';
 
+  const usage = data?.usageMetadata || {};
+  const costUsd = estimateCostUsd(model, usage);
+
   return resp(200, {
     answer: answer.trim(),
     model,
+    routing: {
+      tier: model === MODEL_FLASH ? 'flash' : 'lite',
+      maxOutputTokens,
+      reason: isAdmin ? 'admin' : (messages.length > 6 ? 'long_conv' : (model === MODEL_FLASH ? 'complex_keyword' : 'simple')),
+    },
     finishReason: cand?.finishReason,
     tokens: {
-      in: data?.usageMetadata?.promptTokenCount || null,
-      out: data?.usageMetadata?.candidatesTokenCount || null,
-      total: data?.usageMetadata?.totalTokenCount || null,
+      in: usage.promptTokenCount || null,
+      out: usage.candidatesTokenCount || null,
+      total: usage.totalTokenCount || null,
     },
+    cost_usd: costUsd,
+    monthly_budget_usd: Number(process.env.GEMINI_MONTHLY_BUDGET_USD || 50),
   });
 };
 

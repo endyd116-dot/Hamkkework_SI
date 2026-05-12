@@ -186,9 +186,40 @@ SLACK_WEBHOOK_URL=https://hooks.slack.com/...  (선택)
 **방법 2 — Netlify CLI**
 ```powershell
 netlify env:set GEMINI_API_KEY "AIza..."
-netlify env:set GEMINI_MODEL "gemini-3.0-flash"
+netlify env:set GEMINI_MODEL_FLASH "gemini-2.5-flash"
+netlify env:set GEMINI_MODEL_LITE "gemini-3.1-flash-lite"
 netlify deploy --prod
 ```
+
+#### 💰 비용 최적화 — 스마트 라우팅
+
+기본값으로 두 모델을 사용합니다:
+- **Flash** (`gemini-2.5-flash`): 운영자 모드 / 복잡한 도구 호출 / 긴 대화
+- **Lite** (`gemini-3.1-flash-lite`): 일반 응대 (저렴, 빠름)
+
+라우팅 휴리스틱:
+- 운영자 로그인 시 → Flash
+- 사용자 메시지에 "신청·작성·등록·분석·요약·초안·견적서·PM·통화" 키워드 → Flash
+- 대화 7턴 이상 → Flash
+- 그 외 → **Lite (기본값)** — 토큰 출력 400개로 제한
+
+비용 가격 환경변수 (Google이 가격 바꾸면 조정):
+```
+GEMINI_PRICE_FLASH_IN=0.30      # USD per 1M input tokens
+GEMINI_PRICE_FLASH_OUT=2.50
+GEMINI_PRICE_LITE_IN=0.10
+GEMINI_PRICE_LITE_OUT=0.40
+GEMINI_MONTHLY_BUDGET_USD=50    # 어드민 대시보드 표시용
+```
+
+#### 🛡 무한루프 방지 5중 안전장치
+1. 세션당 도구 호출 ≤ 10회
+2. 동일 도구·동일 인자 연속 ≤ 3회 → 차단
+3. 대화 턴 ≤ 30회 → "새 세션 시작" 안내
+4. 분당 API 호출 ≤ 12회 → rate limit
+5. 출력 토큰 캡: 400 (Lite) / 800 (Flash) / 1024 (운영자)
+
+월 비용이 $40 도달 시 ⚠️ 경고, $50 도달 시 🚨 경고. (현재는 차단 없이 표시만 — 차단 원하면 README 가이드대로 hard cap 활성화.)
 
 #### 작동 방식
 

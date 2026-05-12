@@ -57,12 +57,70 @@ export function renderDashboard() {
 
   const recent = [...leads].sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || '')).slice(0, 6);
 
+  // 💰 AI 비용 계산 (이번 달)
+  const usageLog = store.usageLog.all();
+  const monthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1).getTime();
+  const monthLog = usageLog.filter((e) => new Date(e.createdAt).getTime() >= monthStart);
+  const monthCost = monthLog.reduce((s, e) => s + (e.cost_usd || 0), 0);
+  const monthTokensIn = monthLog.reduce((s, e) => s + (e.tokens_in || 0), 0);
+  const monthTokensOut = monthLog.reduce((s, e) => s + (e.tokens_out || 0), 0);
+  const flashCalls = monthLog.filter((e) => e.tier === 'flash').length;
+  const liteCalls = monthLog.filter((e) => e.tier === 'lite').length;
+  const BUDGET = 50;
+  const usagePct = Math.min(100, (monthCost / BUDGET) * 100);
+  const usageColor = usagePct >= 100 ? 'var(--critical)' : usagePct >= 80 ? 'var(--warning)' : 'var(--cobalt)';
+
   return `
     <div class="kpi-row">
       <div class="kpi"><div class="label">이번주 신규 리드</div><div class="value">${newThisWeek}</div><div class="delta up">${leads.length}건 누적</div></div>
       <div class="kpi"><div class="label">진행 중 프로젝트</div><div class="value">${activeProjects}</div><div class="delta">${projects.length}건 전체</div></div>
       <div class="kpi"><div class="label">이번달 수주</div><div class="value">${wonThisMonth}</div><div class="delta up">+${wonThisMonth}건</div></div>
       <div class="kpi"><div class="label">미수금</div><div class="value">${fmt.num(pendingAmount)}<small style="font-size:14px;color:var(--steel);font-weight:500"> 만원</small></div><div class="delta ${pendingAmount > 0 ? 'down' : ''}">${invoices.filter(i=>i.status!=='paid').length}건</div></div>
+    </div>
+
+    <!-- 💰 AI 비용 모니터링 카드 -->
+    <div class="adm-card" style="border-left:4px solid ${usageColor}">
+      <h3>💰 AI 비용 모니터링 (이번 달)
+        <span style="font-size:12px;font-weight:400;color:var(--steel)">예산 $${BUDGET} / 월</span>
+      </h3>
+      <div class="desc">스마트 라우팅으로 단순 응대는 Lite, 복잡한 추론은 Flash로 자동 분기. 한도 80% 도달 시 챗봇이 사용자에게 경고합니다.</div>
+
+      <div style="display:flex;align-items:baseline;gap:14px;margin-bottom:10px">
+        <div style="font-size:36px;font-weight:800;color:${usageColor};letter-spacing:-0.03em;line-height:1">$${monthCost.toFixed(2)}</div>
+        <div style="font-size:14px;color:var(--steel)">/ $${BUDGET}</div>
+        <div style="font-size:13px;color:${usageColor};font-weight:700">${usagePct.toFixed(1)}%</div>
+      </div>
+
+      <div style="height:10px;background:var(--hairline-soft);border-radius:999px;overflow:hidden;margin-bottom:18px">
+        <div style="width:${usagePct}%;height:100%;background:${usageColor};transition:width 800ms ease"></div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px">
+        <div style="padding:12px 14px;background:var(--surface-softer);border-radius:var(--r-md)">
+          <div style="font-size:10px;font-weight:700;color:var(--steel);text-transform:uppercase;letter-spacing:.06em">Flash 호출</div>
+          <div style="font-size:18px;font-weight:700;color:var(--ink-deep);margin-top:4px">${flashCalls}건</div>
+          <div style="font-size:11px;color:var(--cobalt-deep)">복잡 추론</div>
+        </div>
+        <div style="padding:12px 14px;background:var(--surface-softer);border-radius:var(--r-md)">
+          <div style="font-size:10px;font-weight:700;color:var(--steel);text-transform:uppercase;letter-spacing:.06em">Lite 호출</div>
+          <div style="font-size:18px;font-weight:700;color:var(--ink-deep);margin-top:4px">${liteCalls}건</div>
+          <div style="font-size:11px;color:var(--success)">저렴·빠름</div>
+        </div>
+        <div style="padding:12px 14px;background:var(--surface-softer);border-radius:var(--r-md)">
+          <div style="font-size:10px;font-weight:700;color:var(--steel);text-transform:uppercase;letter-spacing:.06em">Input 토큰</div>
+          <div style="font-size:18px;font-weight:700;color:var(--ink-deep);margin-top:4px">${fmt.num(monthTokensIn)}</div>
+        </div>
+        <div style="padding:12px 14px;background:var(--surface-softer);border-radius:var(--r-md)">
+          <div style="font-size:10px;font-weight:700;color:var(--steel);text-transform:uppercase;letter-spacing:.06em">Output 토큰</div>
+          <div style="font-size:18px;font-weight:700;color:var(--ink-deep);margin-top:4px">${fmt.num(monthTokensOut)}</div>
+        </div>
+      </div>
+
+      ${usagePct >= 80 ? `
+        <div style="margin-top:14px;padding:10px 14px;background:var(--warning-soft);border-radius:var(--r-md);font-size:12px;color:#92400E">
+          ⚠️ <b>예산 80% 도달.</b> 트래픽이 계속되면 곧 한도 초과합니다. 시스템 프롬프트를 압축하거나 모든 호출을 Lite로 전환하세요 (어드민 → 설정 → 환경변수).
+        </div>
+      ` : ''}
     </div>
 
     <div class="adm-card">

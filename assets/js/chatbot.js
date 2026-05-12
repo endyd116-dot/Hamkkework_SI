@@ -28,6 +28,19 @@ let sending = false;
 let leadCreatedInSession = false;  // session-level rate limit
 let lastLeadAt = 0;
 
+// 🛡 무한루프 방지 5중 안전장치
+const LIMITS = {
+  toolsPerSession: 10,         // 한 세션에서 도구 호출 최대 횟수
+  sameToolConsecutive: 3,      // 동일 도구·동일 인자 연속 호출 최대
+  conversationTurns: 30,       // 한 세션 최대 메시지 수 (user+bot 합)
+  apiCallsPerMinute: 12,       // 분당 API 호출 최대
+  monthlyBudgetUsd: 50,        // 월 비용 한도 (정보 표시용)
+};
+let sessionToolCalls = 0;
+let lastToolSignature = '';
+let sameToolStreak = 0;
+const apiCallTimes = [];        // 최근 60초 동안의 호출 시각
+
 function escapeHtml(s) {
   return (s ?? '')
     .replace(/&/g, '&amp;')
@@ -141,6 +154,25 @@ function validateAction(action) {
 
 /** Execute a single tool call. Returns { ok, message, card? } */
 async function executeAction(action) {
+  // 🛡 안전장치 3: 세션당 도구 호출 한도
+  sessionToolCalls++;
+  if (sessionToolCalls > LIMITS.toolsPerSession) {
+    return { ok: false, message: `세션당 도구 호출 한도(${LIMITS.toolsPerSession}회)에 도달했습니다. 새 세션을 시작해 주세요.` };
+  }
+
+  // 🛡 안전장치 4: 동일 도구·동일 인자 연속 호출 차단
+  const signature = `${action.tool}::${JSON.stringify(action.data || {})}`;
+  if (signature === lastToolSignature) {
+    sameToolStreak++;
+    if (sameToolStreak >= LIMITS.sameToolConsecutive) {
+      console.warn('[agent] same tool called', sameToolStreak, 'times → blocked');
+      return { ok: false, message: '동일 작업이 반복되어 차단했습니다 (무한루프 방지).' };
+    }
+  } else {
+    lastToolSignature = signature;
+    sameToolStreak = 1;
+  }
+
   const err = validateAction(action);
   if (err) return { ok: false, message: err };
 
@@ -618,6 +650,31 @@ function fmtDate(iso) {
   catch { return iso; }
 }
 
+/* ============================================================
+   💰 월 예산 모니터링 (정보 표시만, 차단은 안 함)
+   ============================================================ */
+let lastWarningAt = 0;
+function checkBudgetWarning() {
+  const log = store.usageLog.all();
+  const now = new Date();
+  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+  const monthlyCost = log
+    .filter((e) => new Date(e.createdAt).getTime() >= monthStart)
+    .reduce((s, e) => s + (e.cost_usd || 0), 0);
+
+  // 한 달에 한 번씩 경고 (스팸 방지)
+  const sinceLastWarn = Date.now() - lastWarningAt;
+  if (sinceLastWarn < 30 * 60_000) return;
+
+  if (monthlyCost >= LIMITS.monthlyBudgetUsd) {
+    lastWarningAt = Date.now();
+    if (window.showToast) window.showToast(`🚨 월 AI 비용 한도($${LIMITS.monthlyBudgetUsd}) 초과 — 현재 $${monthlyCost.toFixed(2)}`, 'error');
+  } else if (monthlyCost >= LIMITS.monthlyBudgetUsd * 0.8) {
+    lastWarningAt = Date.now();
+    if (window.showToast) window.showToast(`⚠️ 월 AI 비용 80% 도달 — $${monthlyCost.toFixed(2)} / $${LIMITS.monthlyBudgetUsd}`, 'warning');
+  }
+}
+
 /** Render a tool-result card in the chatbot panel */
 function renderActionCard(card) {
   const tone = card.tone || 'info';
@@ -739,6 +796,21 @@ function fallbackReply(question) {
 async function send(question) {
   const q = (question ?? input.value).trim();
   if (!q || sending) return;
+
+  // 🛡 안전장치 1: 대화 턴 수 제한
+  if (conversation.length >= LIMITS.conversationTurns * 2) {
+    bubble(`⚠️ 대화가 너무 길어졌습니다 (${LIMITS.conversationTurns}턴 초과). 페이지를 새로고침해 새 세션을 시작해 주세요.`, 'bot');
+    return;
+  }
+
+  // 🛡 안전장치 2: 분당 API 호출 제한 (rate limit)
+  const oneMinuteAgo = Date.now() - 60_000;
+  while (apiCallTimes.length && apiCallTimes[0] < oneMinuteAgo) apiCallTimes.shift();
+  if (apiCallTimes.length >= LIMITS.apiCallsPerMinute) {
+    bubble(`⚠️ 분당 호출 한도(${LIMITS.apiCallsPerMinute}회)에 도달했습니다. 잠시 후 다시 시도해 주세요.`, 'bot');
+    return;
+  }
+
   sending = true;
   input.value = '';
 
@@ -751,10 +823,27 @@ async function send(question) {
   let rawAnswer = '';
   let usedFallback = false;
 
+  let geminiRes = null;
   try {
-    const res = await askGemini();
-    rawAnswer = (res?.answer || '').trim();
+    apiCallTimes.push(Date.now());
+    geminiRes = await askGemini();
+    rawAnswer = (geminiRes?.answer || '').trim();
     if (!rawAnswer) throw new Error('빈 응답');
+
+    // 📊 사용량 누적
+    if (geminiRes.tokens || geminiRes.cost_usd != null) {
+      store.usageLog.add({
+        model: geminiRes.model,
+        tier: geminiRes.routing?.tier,
+        reason: geminiRes.routing?.reason,
+        tokens_in: geminiRes.tokens?.in || 0,
+        tokens_out: geminiRes.tokens?.out || 0,
+        cost_usd: geminiRes.cost_usd || 0,
+        sessionId,
+      });
+      // 한도 임박 경고
+      checkBudgetWarning();
+    }
   } catch (e) {
     console.warn('[chatbot] Gemini failed, using fallback', e);
     rawAnswer = fallbackReply(q);
