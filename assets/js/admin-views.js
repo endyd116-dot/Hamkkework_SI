@@ -505,97 +505,219 @@ function openQuoteDrawer(id) {
   });
 }
 
-function generateQuotePdf(id) {
+/**
+ * Generate Korean-safe PDF via HTML→Canvas→PDF.
+ * jsPDF's built-in fonts don't support CJK, so we render an HTML template
+ * using Pretendard and capture it with html2canvas, then paginate into A4.
+ */
+async function generateQuotePdf(id) {
   const q = store.quotes.byId(id);
   const s = store.settings.get();
-  if (!q) return;
-  const { jsPDF } = window.jspdf;
-  const doc = new jsPDF({ unit: 'mm', format: 'a4' });
-
-  // Header
-  doc.setFontSize(18);
-  doc.setTextColor(8, 102, 255);
-  doc.text(s.brand || '함께워크_SI', 20, 24);
-  doc.setFontSize(10);
-  doc.setTextColor(100);
-  doc.text('SI · AI Platform', 20, 30);
-
-  doc.setFontSize(22);
-  doc.setTextColor(20);
-  doc.text('견 적 서', 150, 30);
-
-  // Meta
-  doc.setFontSize(10);
-  doc.setTextColor(60);
-  doc.text(`발행일: ${fmt.date(new Date().toISOString())}`, 150, 38);
-  doc.text(`견적번호: Q-${q.id?.slice(-8).toUpperCase()}`, 150, 44);
-
-  // Client
-  doc.setFontSize(12);
-  doc.setTextColor(20);
-  doc.text(`수신: ${q.clientName || '—'} 귀하`, 20, 50);
-  doc.text(`제목: ${q.title || '—'}`, 20, 58);
-
-  doc.setDrawColor(8, 102, 255);
-  doc.setLineWidth(0.5);
-  doc.line(20, 64, 190, 64);
-
-  // Items
-  let y = 76;
-  doc.setFontSize(11);
-  doc.setTextColor(60);
-  doc.setFillColor(242, 247, 255);
-  doc.rect(20, y - 6, 170, 8, 'F');
-  doc.text('항목', 24, y);
-  doc.text('금액 (만원)', 175, y, { align: 'right' });
-  y += 6;
-
-  doc.setTextColor(30);
-  (q.items || []).forEach((it) => {
-    doc.text(it.label || '—', 24, y + 4);
-    doc.text(fmt.num(it.amount || 0), 175, y + 4, { align: 'right' });
-    doc.setDrawColor(230);
-    doc.line(20, y + 7, 190, y + 7);
-    y += 9;
-  });
-
-  const sub = (q.items || []).reduce((s, x) => s + (Number(x.amount) || 0), 0);
-  const oh = sub * ((q.overhead || 25) / 100);
-  const grand = sub + oh;
-
-  y += 4;
-  doc.text(`소계: ${fmt.num(sub)} 만원`, 175, y, { align: 'right' });
-  y += 6;
-  doc.text(`QA · PM (${q.overhead || 25}%): ${fmt.num(oh)} 만원`, 175, y, { align: 'right' });
-  y += 8;
-
-  doc.setDrawColor(8, 102, 255);
-  doc.setLineWidth(1);
-  doc.line(120, y, 190, y);
-  doc.setFontSize(14);
-  doc.setTextColor(8, 102, 255);
-  y += 8;
-  doc.text(`합계: ${fmt.num(grand)} 만원 (VAT 별도)`, 175, y, { align: 'right' });
-
-  // Notes
-  if (q.notes) {
-    y += 14;
-    doc.setFontSize(10);
-    doc.setTextColor(80);
-    doc.text('특이사항', 20, y);
-    doc.setFontSize(9);
-    const split = doc.splitTextToSize(q.notes, 170);
-    doc.text(split, 20, y + 5);
+  if (!q) {
+    toast('견적을 찾을 수 없습니다', 'error');
+    return;
+  }
+  if (!window.html2canvas || !window.jspdf) {
+    toast('PDF 라이브러리가 로드되지 않았습니다. 새로고침 후 다시 시도해 주세요.', 'error');
+    return;
   }
 
-  // Footer
-  doc.setFontSize(9);
-  doc.setTextColor(120);
-  doc.text(`담당: ${s.pm || '박단용'} | ${s.email || ''} | ${s.phone || ''}`, 20, 280);
-  doc.text('결제 일정: 선금 30% / 중도금 40% / 잔금 30% (검수 합격일 정산)', 20, 286);
+  toast('PDF 생성 중…');
 
-  doc.save(`견적서_${q.clientName || 'client'}_${q.id?.slice(-6)}.pdf`);
-  toast('PDF가 생성되었습니다', 'success');
+  const sub = (q.items || []).reduce((acc, x) => acc + (Number(x.amount) || 0), 0);
+  const overheadPct = Number(q.overhead) || 25;
+  const oh = sub * (overheadPct / 100);
+  const grand = sub + oh;
+  const vat = grand * 0.1;
+  const grandVat = grand + vat;
+
+  const quoteNo = `Q-${(q.id || '').slice(-8).toUpperCase()}`;
+  const today = new Date();
+  const valid = new Date(today.getTime() + 30 * 86400000); // 30 days
+  const dateStr = (d) => `${d.getFullYear()}년 ${d.getMonth() + 1}월 ${d.getDate()}일`;
+
+  // A4 width in pixels at 96dpi ≈ 794. We use 800 to leave some padding.
+  const host = document.createElement('div');
+  host.style.cssText = `
+    position: fixed; left: -10000px; top: 0;
+    width: 794px; padding: 0; margin: 0;
+    background: #fff;
+    font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, sans-serif;
+    color: #1C2B33;
+    font-feature-settings: "ss06";
+  `;
+  host.innerHTML = `
+    <div style="padding:56px 56px 48px;background:#fff">
+
+      <!-- Header -->
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid #0866FF;padding-bottom:24px;margin-bottom:36px">
+        <div>
+          <div style="display:flex;align-items:center;gap:10px">
+            <div style="width:14px;height:14px;border-radius:50%;background:#0866FF;box-shadow:0 0 0 4px rgba(8,102,255,.16)"></div>
+            <div style="font-size:22px;font-weight:800;color:#0A1317;letter-spacing:-0.02em">${escapeHtml(s.brand || '함께워크_SI')}</div>
+          </div>
+          <div style="margin-top:6px;font-size:11px;font-weight:700;color:#0866FF;letter-spacing:0.1em;text-transform:uppercase">SI · AI Platform</div>
+        </div>
+        <div style="text-align:right">
+          <div style="font-size:36px;font-weight:700;color:#0A1317;letter-spacing:0.16em;line-height:1">견 적 서</div>
+          <div style="margin-top:10px;font-size:12px;color:#6B7280;line-height:1.6">
+            <div><b style="color:#0143B5">견적번호</b> · ${quoteNo}</div>
+            <div><b style="color:#0143B5">발행일</b> · ${dateStr(today)}</div>
+            <div><b style="color:#0143B5">유효기간</b> · ${dateStr(valid)}</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Client / Subject -->
+      <table style="width:100%;border-collapse:collapse;margin-bottom:28px;font-size:13px">
+        <tr>
+          <td style="width:80px;padding:12px 14px;background:#F2F7FF;color:#0143B5;font-weight:700;border-radius:6px 0 0 6px">수 신</td>
+          <td style="padding:12px 18px;background:#FAFBFC;font-weight:600;color:#1C2B33">${escapeHtml(q.clientName || '—')} 귀하</td>
+        </tr>
+        <tr><td colspan="2" style="height:6px"></td></tr>
+        <tr>
+          <td style="padding:12px 14px;background:#F2F7FF;color:#0143B5;font-weight:700;border-radius:6px 0 0 6px">제 목</td>
+          <td style="padding:12px 18px;background:#FAFBFC;font-weight:600;color:#1C2B33">${escapeHtml(q.title || '제목 없음')}</td>
+        </tr>
+      </table>
+
+      <!-- Items -->
+      <table style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:24px">
+        <thead>
+          <tr>
+            <th style="text-align:left;padding:12px 16px;background:#0A1317;color:#fff;font-weight:600;border-radius:6px 0 0 6px">항목</th>
+            <th style="text-align:right;padding:12px 16px;background:#0A1317;color:#fff;font-weight:600;border-radius:0 6px 6px 0;width:140px">금액 (만원)</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${(q.items || []).length === 0 ? `
+            <tr><td colspan="2" style="padding:24px;text-align:center;color:#9CA3AF">항목 없음</td></tr>
+          ` : (q.items || []).map((it) => `
+            <tr>
+              <td style="padding:13px 16px;border-bottom:1px solid #EBEDF0;color:#1C2B33">${escapeHtml(it.label || '—')}</td>
+              <td style="padding:13px 16px;border-bottom:1px solid #EBEDF0;text-align:right;color:#1C2B33;font-variant-numeric:tabular-nums">${fmt.num(it.amount || 0)}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+        <tfoot>
+          <tr>
+            <td style="padding:14px 16px;text-align:right;color:#4B5563">소계</td>
+            <td style="padding:14px 16px;text-align:right;font-weight:600;color:#1C2B33">${fmt.num(sub)} 만원</td>
+          </tr>
+          <tr>
+            <td style="padding:10px 16px;text-align:right;color:#4B5563">QA · PM (${overheadPct}%)</td>
+            <td style="padding:10px 16px;text-align:right;font-weight:600;color:#1C2B33">${fmt.num(oh)} 만원</td>
+          </tr>
+          <tr>
+            <td style="padding:10px 16px;text-align:right;color:#4B5563">VAT (10%)</td>
+            <td style="padding:10px 16px;text-align:right;font-weight:600;color:#1C2B33">${fmt.num(vat)} 만원</td>
+          </tr>
+          <tr>
+            <td style="padding:18px 16px;text-align:right;font-size:14px;color:#0143B5;font-weight:700;border-top:2px solid #0866FF">합계 (VAT 포함)</td>
+            <td style="padding:18px 16px;text-align:right;font-size:20px;color:#0866FF;font-weight:800;letter-spacing:-0.02em;border-top:2px solid #0866FF;font-variant-numeric:tabular-nums">${fmt.num(grandVat)} 만원</td>
+          </tr>
+        </tfoot>
+      </table>
+
+      ${q.notes ? `
+        <div style="margin-bottom:24px;padding:18px 20px;background:#FAFBFC;border-left:3px solid #0866FF;border-radius:0 6px 6px 0">
+          <div style="font-size:11px;font-weight:700;color:#0866FF;letter-spacing:0.06em;text-transform:uppercase;margin-bottom:8px">특이사항</div>
+          <div style="font-size:13px;color:#1C2B33;line-height:1.6;white-space:pre-wrap">${escapeHtml(q.notes)}</div>
+        </div>
+      ` : ''}
+
+      <!-- Terms -->
+      <div style="margin-top:32px;padding:20px 22px;background:linear-gradient(135deg,#F2F7FF,#FAFBFC);border-radius:8px;border:1px solid #E5F0FE">
+        <div style="font-size:11px;font-weight:700;color:#0866FF;letter-spacing:0.06em;text-transform:uppercase;margin-bottom:12px">계약 및 정산 조건</div>
+        <table style="width:100%;font-size:12px;color:#1C2B33;line-height:1.7">
+          <tr>
+            <td style="width:110px;color:#6B7280;padding:3px 0">결제 일정</td>
+            <td style="padding:3px 0"><b>선금 30%</b> · 중도금 40% · <b>잔금 30%</b> (검수 합격일 정산)</td>
+          </tr>
+          <tr>
+            <td style="color:#6B7280;padding:3px 0">하자보증</td>
+            <td style="padding:3px 0">인도 후 <b>${s.warranty_months || 6}개월 무상</b> · 소스 100% 양도 · 운영 인계 매뉴얼 포함</td>
+          </tr>
+          <tr>
+            <td style="color:#6B7280;padding:3px 0">검수 기준</td>
+            <td style="padding:3px 0">사용자 검수 통과 시 = 인도 (단계별 마일스톤 검수 적용)</td>
+          </tr>
+          <tr>
+            <td style="color:#6B7280;padding:3px 0">유효기간</td>
+            <td style="padding:3px 0">발행일로부터 <b>30일</b></td>
+          </tr>
+          <tr>
+            <td style="color:#6B7280;padding:3px 0">기타</td>
+            <td style="padding:3px 0">AI 운영비(토큰·벡터DB·GPU), 인프라·도메인·SSL은 월 별도 정산</td>
+          </tr>
+        </table>
+      </div>
+
+      <!-- Footer / Issuer -->
+      <div style="margin-top:36px;padding-top:24px;border-top:1px solid #EBEDF0;display:flex;justify-content:space-between;align-items:flex-start">
+        <div>
+          <div style="font-size:11px;font-weight:700;color:#0866FF;letter-spacing:0.06em;text-transform:uppercase">발행</div>
+          <div style="margin-top:6px;font-size:14px;font-weight:700;color:#0A1317">${escapeHtml(s.brand || '함께워크_SI')}</div>
+          <div style="margin-top:10px;font-size:12px;color:#4B5563;line-height:1.7">
+            담당 · ${escapeHtml(s.pm || '박단용')}<br>
+            E-MAIL · ${escapeHtml(s.email || 'endyd116@gmail.com')}<br>
+            TEL · ${escapeHtml(s.phone || '010-2807-5242')}
+          </div>
+        </div>
+        <div style="text-align:right;font-size:10px;color:#9CA3AF;line-height:1.5">
+          본 견적서는 함께워크_SI 시스템에서 자동 발행되었습니다.<br>
+          관련 문의는 위 담당자에게 연락 바랍니다.
+        </div>
+      </div>
+
+    </div>
+  `;
+  document.body.appendChild(host);
+
+  // Give the browser one frame to render
+  await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+
+  try {
+    const canvas = await window.html2canvas(host, {
+      scale: 2,
+      backgroundColor: '#ffffff',
+      useCORS: true,
+      logging: false,
+      windowWidth: 794,
+    });
+
+    const { jsPDF } = window.jspdf;
+    const pdf = new jsPDF({ unit: 'mm', format: 'a4', orientation: 'p' });
+
+    const imgWidth = 210;  // A4 width in mm
+    const pageHeight = 297;
+    const imgHeight = (canvas.height * imgWidth) / canvas.width;
+
+    const imgData = canvas.toDataURL('image/jpeg', 0.92);
+
+    let heightLeft = imgHeight;
+    let position = 0;
+
+    pdf.addImage(imgData, 'JPEG', 0, position, imgWidth, imgHeight);
+    heightLeft -= pageHeight;
+
+    while (heightLeft > 0) {
+      position = heightLeft - imgHeight;
+      pdf.addPage();
+      pdf.addImage(imgData, 'JPEG', 0, position, imgWidth, imgHeight);
+      heightLeft -= pageHeight;
+    }
+
+    const safeName = (q.clientName || 'client').replace(/[\\/:*?"<>|]/g, '_').trim() || 'client';
+    pdf.save(`견적서_${safeName}_${quoteNo}.pdf`);
+
+    toast('PDF가 생성되었습니다', 'success');
+  } catch (e) {
+    console.error('[pdf] generation failed', e);
+    toast('PDF 생성 중 오류가 발생했습니다: ' + (e?.message || e), 'error');
+  } finally {
+    host.remove();
+  }
 }
 
 /* ============================================================
