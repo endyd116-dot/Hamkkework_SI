@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>함께워크_SI 클라이언트 포털</title>
+<meta name="robots" content="noindex,nofollow">
+
+<link rel="preconnect" href="https://cdn.jsdelivr.net">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/[email protected]/dist/web/static/pretendard.css">
+<link rel="stylesheet" href="assets/css/tokens.css">
+<link rel="stylesheet" href="assets/css/animations.css">
+<link rel="stylesheet" href="assets/css/admin.css">
+
+<style>
+.portal-header {
+  background: var(--canvas);
+  border-bottom: 1px solid var(--hairline-soft);
+  padding: 18px 32px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.portal-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 16px;
+  font-weight: 800;
+  color: var(--ink-deep);
+}
+.portal-brand .brand-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--cobalt); }
+.portal-shell { max-width: 1080px; margin: 0 auto; padding: 32px; }
+.portal-greet h1 { font-size: 28px; font-weight: 600; color: var(--ink-deep); letter-spacing: -0.02em; }
+.portal-greet p { color: var(--slate); font-size: 14px; margin-top: 6px; }
+
+.project-grid { display: grid; gap: 16px; margin-top: 32px; }
+
+.report-item {
+  background: var(--surface-softer);
+  border-radius: var(--r-md);
+  padding: 12px 14px;
+  font-size: 13px;
+  color: var(--ink);
+  line-height: 1.55;
+  border-left: 3px solid var(--cobalt);
+}
+.report-item .when { font-size: 11px; color: var(--steel); margin-bottom: 4px; }
+
+.milestone-list { display: grid; gap: 8px; margin-top: 12px; }
+.milestone-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 12px; background: var(--surface-soft);
+  border-radius: var(--r-md); font-size: 13px;
+}
+.milestone-item .check {
+  width: 18px; height: 18px;
+  border-radius: 50%; border: 2px solid var(--hairline);
+  display: inline-flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+}
+.milestone-item.done .check {
+  background: var(--success); border-color: var(--success); color: #fff;
+}
+.milestone-item.done .check::after { content: "✓"; font-size: 11px; font-weight: 700; }
+.milestone-item.done { color: var(--steel); text-decoration: line-through; }
+</style>
+</head>
+<body>
+
+<!-- Login -->
+<div id="loginShell" class="login-shell" style="display:none">
+  <div class="login-card">
+    <div class="brand">
+      <span class="brand-dot"></span>
+      <span>함께워크_SI <span class="sidebar-brand-sub">Client Portal</span></span>
+    </div>
+    <h1>클라이언트 로그인</h1>
+    <p>진행 중 프로젝트의 마일스톤, 주간 보고, 결제 상태를 한 곳에서 확인하세요.</p>
+    <form class="login-form" id="loginForm">
+      <div>
+        <label>이메일</label>
+        <input id="loginEmail" type="email" required autocomplete="username">
+      </div>
+      <div>
+        <label>비밀번호</label>
+        <input id="loginPwd" type="password" required autocomplete="current-password">
+      </div>
+      <button type="submit">로그인</button>
+    </form>
+    <div class="login-hint">
+      ※ 어드민의 [클라이언트 포털]에서 계정을 발급받으셔야 합니다.
+      <br>데모 시: 어드민에 들어가 [클라이언트 포털] → [+ 계정 생성]으로 임의 계정을 만들어 보세요.
+    </div>
+  </div>
+</div>
+
+<!-- Portal -->
+<div id="portalShell" style="display:none;background:var(--surface-soft);min-height:100vh">
+  <header class="portal-header">
+    <div class="portal-brand">
+      <span class="brand-dot"></span>
+      <span>함께워크_SI <span style="font-size:10px;color:var(--cobalt);letter-spacing:.08em;text-transform:uppercase;font-weight:700;margin-left:6px">Client Portal</span></span>
+    </div>
+    <div style="display:flex;align-items:center;gap:12px">
+      <span id="clientName" style="font-size:13px;color:var(--slate)"></span>
+      <button class="adm-btn ghost" id="logoutBtn">로그아웃</button>
+    </div>
+  </header>
+
+  <main class="portal-shell">
+    <div class="portal-greet">
+      <h1 id="greet">진행 현황</h1>
+      <p>마일스톤, 주간 보고, 인보이스 상태를 확인하실 수 있습니다.</p>
+    </div>
+
+    <div class="project-grid" id="projectGrid"></div>
+  </main>
+</div>
+
+<div class="toast-container" id="toastContainer"></div>
+
+<script type="module">
+import { store, ensureSeed } from './assets/js/store.js';
+import { $, $$, escapeHtml, fmt, toast } from './assets/js/admin-ui.js';
+
+await ensureSeed();
+
+const SESSION_KEY = 'hamkkework.clientSession';
+
+function getSession() {
+  try { return JSON.parse(localStorage.getItem(SESSION_KEY) || 'null'); } catch { return null; }
+}
+function setSession(s) { localStorage.setItem(SESSION_KEY, JSON.stringify(s)); }
+function clearSession() { localStorage.removeItem(SESSION_KEY); }
+
+function showLogin() { $('#loginShell').style.display = 'grid'; $('#portalShell').style.display = 'none'; }
+function showPortal() { $('#loginShell').style.display = 'none'; $('#portalShell').style.display = 'block'; render(); }
+
+$('#loginForm').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const email = $('#loginEmail').value.trim();
+  const pwd = $('#loginPwd').value;
+  const clients = store.clients.all();
+  const match = clients.find(c => c.email === email && c.password === pwd);
+  if (!match) {
+    toast('계정 정보가 일치하지 않습니다', 'error');
+    return;
+  }
+  setSession({ id: match.id, name: match.name, email: match.email, at: new Date().toISOString() });
+  showPortal();
+});
+
+$('#logoutBtn').addEventListener('click', () => {
+  clearSession();
+  showLogin();
+});
+
+function render() {
+  const session = getSession();
+  if (!session) return showLogin();
+  const client = store.clients.byId(session.id);
+  if (!client) { clearSession(); return showLogin(); }
+
+  $('#greet').textContent = `${client.name}님의 프로젝트`;
+  $('#clientName').textContent = `${client.name} · ${client.company || ''}`.trim();
+
+  const projects = (client.projects || []).map(id => store.projects.byId(id)).filter(Boolean);
+  const invoices = store.invoices.all().filter(i => i.clientName === client.company || i.clientName === client.name);
+
+  const grid = $('#projectGrid');
+  if (projects.length === 0) {
+    grid.innerHTML = `<div class="adm-empty"><div class="icon">📋</div><div>아직 연결된 프로젝트가 없습니다. 담당자에게 문의해 주세요.</div></div>`;
+    return;
+  }
+
+  grid.innerHTML = projects.map(p => {
+    const ms = p.milestones || [];
+    const done = ms.filter(m => m.done).length;
+    const pct = ms.length ? (done / ms.length) * 100 : 0;
+    const myInvoices = invoices.filter(i => true); // simple match
+
+    return `
+      <div class="adm-card">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px">
+          <div>
+            <div style="font-size:11px;color:var(--steel);font-weight:700;letter-spacing:.04em;text-transform:uppercase">${escapeHtml(p.clientName || '')}</div>
+            <h2 style="font-size:22px;font-weight:600;color:var(--ink-deep);margin-top:4px;letter-spacing:-.02em">${escapeHtml(p.name || '')}</h2>
+            <p style="font-size:14px;color:var(--slate);margin-top:6px;line-height:1.5">${escapeHtml(p.summary || '')}</p>
+          </div>
+          <span class="tag ${p.status === 'done' ? 'success' : 'cobalt'}">${p.status === 'done' ? '완료' : p.status}</span>
+        </div>
+
+        <div style="margin-top:18px">
+          <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--steel);margin-bottom:6px">
+            <span>전체 진행률</span>
+            <span>${done}/${ms.length} (${pct.toFixed(0)}%)</span>
+          </div>
+          <div style="height:8px;background:var(--hairline-soft);border-radius:999px;overflow:hidden">
+            <div style="width:${pct}%;height:100%;background:linear-gradient(90deg,var(--cobalt),var(--cobalt-tint));transition:width 1s ease"></div>
+          </div>
+        </div>
+
+        <h3 style="font-size:13px;font-weight:700;margin-top:24px;color:var(--steel);text-transform:uppercase;letter-spacing:.04em">마일스톤</h3>
+        <div class="milestone-list">
+          ${ms.map(m => `
+            <div class="milestone-item ${m.done ? 'done' : ''}">
+              <span class="check"></span>
+              <span>${escapeHtml(m.label || '')}</span>
+            </div>
+          `).join('') || '<div style="color:var(--steel);font-size:13px">아직 마일스톤이 등록되지 않았습니다.</div>'}
+        </div>
+
+        <h3 style="font-size:13px;font-weight:700;margin-top:24px;color:var(--steel);text-transform:uppercase;letter-spacing:.04em">최근 주간 보고</h3>
+        <div style="display:grid;gap:8px;margin-top:8px">
+          ${(p.reports || []).slice(0, 5).map(r => `
+            <div class="report-item">
+              <div class="when">${fmt.dt(r.at)}</div>
+              <div>${escapeHtml(r.text || '').replace(/\\n/g, '<br>')}</div>
+            </div>
+          `).join('') || '<div style="color:var(--steel);font-size:13px">아직 보고가 없습니다.</div>'}
+        </div>
+
+        ${myInvoices.length > 0 ? `
+          <h3 style="font-size:13px;font-weight:700;margin-top:24px;color:var(--steel);text-transform:uppercase;letter-spacing:.04em">결제 현황</h3>
+          <table class="adm-table" style="margin-top:8px">
+            <thead><tr><th>단계</th><th>금액</th><th>상태</th></tr></thead>
+            <tbody>${myInvoices.map(i => `
+              <tr>
+                <td>${escapeHtml(i.phase || '')}</td>
+                <td><b>${fmt.num(i.amount || 0)} 만원</b></td>
+                <td><span class="tag ${i.status === 'paid' ? 'success' : 'warning'}">${i.status === 'paid' ? '입금' : '미입금'}</span></td>
+              </tr>
+            `).join('')}</tbody>
+          </table>
+        ` : ''}
+      </div>
+    `;
+  }).join('');
+}
+
+// boot
+if (getSession()) showPortal();
+else showLogin();
+</script>
+
+</body>
+</html>

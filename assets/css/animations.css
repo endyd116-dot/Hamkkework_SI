@@ -1,0 +1,212 @@
+/* ============================================================
+   Animation library — scroll reveals, hover effects, attention
+   ============================================================ */
+
+/* Fade up (default reveal) */
+.reveal {
+  opacity: 0;
+  transform: translateY(24px);
+  transition: opacity 700ms var(--ease-out), transform 700ms var(--ease-out);
+  will-change: opacity, transform;
+}
+.reveal.in {
+  opacity: 1;
+  transform: none;
+}
+
+/* Stagger child reveals */
+.stagger > * {
+  opacity: 0;
+  transform: translateY(20px);
+  transition: opacity 600ms var(--ease-out), transform 600ms var(--ease-out);
+}
+.stagger.in > *:nth-child(1) { transition-delay: 0ms; }
+.stagger.in > *:nth-child(2) { transition-delay: 80ms; }
+.stagger.in > *:nth-child(3) { transition-delay: 160ms; }
+.stagger.in > *:nth-child(4) { transition-delay: 240ms; }
+.stagger.in > *:nth-child(5) { transition-delay: 320ms; }
+.stagger.in > *:nth-child(6) { transition-delay: 400ms; }
+.stagger.in > * { opacity: 1; transform: none; }
+
+/* Fade from left/right */
+.reveal-left { transform: translateX(-32px); }
+.reveal-right { transform: translateX(32px); }
+.reveal-left.in, .reveal-right.in { transform: none; }
+
+/* Scale fade */
+.reveal-scale {
+  opacity: 0;
+  transform: scale(0.92);
+  transition: opacity 700ms var(--ease-out), transform 700ms var(--ease-spring);
+}
+.reveal-scale.in {
+  opacity: 1;
+  transform: none;
+}
+
+/* Counter blink */
+@keyframes counter-pulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.05); }
+}
+.counter-on {
+  animation: counter-pulse 400ms var(--ease-out);
+}
+
+/* Hero typing caret */
+@keyframes blink-caret {
+  0%, 50% { opacity: 1; }
+  51%, 100% { opacity: 0; }
+}
+.type-caret {
+  display: inline-block;
+  width: 4px;
+  height: 0.95em;
+  background: var(--cobalt);
+  margin-left: 4px;
+  vertical-align: text-bottom;
+  animation: blink-caret 900ms steps(1) infinite;
+  border-radius: 2px;
+}
+
+/* Marquee — infinite horizontal scroll */
+@keyframes marquee-x {
+  0% { transform: translateX(0); }
+  100% { transform: translateX(-50%); }
+}
+.marquee {
+  overflow: hidden;
+  mask-image: linear-gradient(90deg, transparent 0, #000 12%, #000 88%, transparent 100%);
+  -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 12%, #000 88%, transparent 100%);
+}
+.marquee-track {
+  display: flex;
+  width: max-content;
+  animation: marquee-x 28s linear infinite;
+  gap: 64px;
+  align-items: center;
+}
+.marquee:hover .marquee-track {
+  animation-play-state: paused;
+}
+
+/* Floating dots / parallax background blobs */
+@keyframes float-blob {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  33% { transform: translate(30px, -20px) scale(1.05); }
+  66% { transform: translate(-20px, 30px) scale(0.95); }
+}
+.blob {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(80px);
+  opacity: 0.55;
+  animation: float-blob 16s var(--ease-in-out) infinite;
+  pointer-events: none;
+}
+
+/* Card tilt — applied via JS for mouse-tracking */
+.tilt {
+  transform-style: preserve-3d;
+  transition: transform 300ms var(--ease-out);
+  will-change: transform;
+}
+
+/* Process path draw */
+@keyframes draw-path {
+  to { stroke-dashoffset: 0; }
+}
+.process-path {
+  stroke-dasharray: 1000;
+  stroke-dashoffset: 1000;
+}
+.process-path.in {
+  animation: draw-path 2.4s var(--ease-out) forwards;
+}
+
+/* Shimmer skeleton */
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+.shimmer {
+  background: linear-gradient(
+    90deg,
+    var(--surface-soft) 0%,
+    var(--hairline-soft) 50%,
+    var(--surface-soft) 100%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.4s linear infinite;
+}
+
+/* Pulse ring (chatbot button) */
+@keyframes pulse-ring {
+  0% { transform: scale(0.9); opacity: 0.8; }
+  100% { transform: scale(1.6); opacity: 0; }
+}
+.pulse-ring::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: var(--cobalt);
+  animation: pulse-ring 2s var(--ease-out) infinite;
+  z-index: -1;
+}
+
+/* Glitch (pain section) */
+@keyframes glitch-x {
+  0%, 100% { transform: translateX(0); }
+  20% { transform: translateX(-2px); }
+  40% { transform: translateX(2px); }
+  60% { transform: translateX(-1px); }
+  80% { transform: translateX(1px); }
+}
+.glitch:hover {
+  animation: glitch-x 250ms var(--ease-out);
+}
+
+/* Slide in panel */
+@keyframes slide-in-right {
+  from { transform: translateX(110%); }
+  to { transform: translateX(0); }
+}
+.panel-in {
+  animation: slide-in-right 380ms var(--ease-out) forwards;
+}
+
+/* Fade in modal */
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.fade-in {
+  animation: fade-in 240ms var(--ease-out) forwards;
+}
+
+/* Hover lift */
+.lift {
+  transition: transform var(--d-base) var(--ease-out), box-shadow var(--d-base) var(--ease-out);
+}
+.lift:hover {
+  transform: translateY(-3px);
+  box-shadow: var(--shadow-lg);
+}
+
+/* Spin */
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+.spin {
+  animation: spin 1s linear infinite;
+}
+
+/* Toast */
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(20px) scale(0.96); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+.toast {
+  animation: toast-in 280ms var(--ease-spring) forwards;
+}

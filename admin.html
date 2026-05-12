@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>함께워크_SI 관리자</title>
+<meta name="robots" content="noindex,nofollow">
+
+<link rel="preconnect" href="https://cdn.jsdelivr.net">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/[email protected]/dist/web/static/pretendard.css">
+
+<link rel="stylesheet" href="assets/css/tokens.css">
+<link rel="stylesheet" href="assets/css/animations.css">
+<link rel="stylesheet" href="assets/css/admin.css">
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+</head>
+<body class="admin">
+
+<!-- Login screen (shown when not authenticated) -->
+<div id="loginShell" class="login-shell" style="display:none">
+  <div class="login-card">
+    <div class="brand">
+      <span class="brand-dot"></span>
+      <span>함께워크_SI <span class="sidebar-brand-sub">Admin</span></span>
+    </div>
+    <h1>관리자 로그인</h1>
+    <p>리드·견적·케이스·블로그·KPI까지 모든 운영을 한 곳에서.</p>
+
+    <form class="login-form" id="loginForm">
+      <div>
+        <label for="loginEmail">이메일</label>
+        <input id="loginEmail" type="email" required placeholder="endyd116@gmail.com" autocomplete="username">
+      </div>
+      <div>
+        <label for="loginPwd">비밀번호</label>
+        <input id="loginPwd" type="password" required placeholder="••••••••" autocomplete="current-password">
+      </div>
+      <button type="submit">로그인</button>
+    </form>
+
+    <div class="login-hint">
+      <b>데모 계정</b> · ID <code>endyd116@gmail.com</code> · PW <code>hamkke2026</code>
+      <br>※ 실서비스 전 Netlify Identity 또는 Supabase Auth로 교체하세요.
+    </div>
+  </div>
+</div>
+
+<!-- Admin shell -->
+<div id="adminShell" class="admin-shell" style="display:none">
+
+  <!-- Sidebar -->
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-header">
+      <span class="brand-dot" style="width:10px;height:10px;border-radius:50%;background:var(--cobalt);box-shadow:0 0 0 3px rgba(8,102,255,.16);flex-shrink:0"></span>
+      <div>
+        <div class="sidebar-brand">함께워크_SI</div>
+        <span class="sidebar-brand-sub">Operator Console</span>
+      </div>
+    </div>
+
+    <nav class="sidebar-nav">
+      <div class="sidebar-section">Operations</div>
+      <a class="sidebar-link" data-view="dashboard">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+        대시보드
+      </a>
+      <a class="sidebar-link" data-view="leads">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+        리드 관리 <span class="badge" id="leadCount" style="display:none">0</span>
+      </a>
+      <a class="sidebar-link" data-view="quotes">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+        견적 / 제안서
+      </a>
+      <a class="sidebar-link" data-view="projects">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+        프로젝트 진행
+      </a>
+      <a class="sidebar-link" data-view="invoices">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="5" width="20" height="14" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/></svg>
+        결제 / 인보이스
+      </a>
+
+      <div class="sidebar-section">Content</div>
+      <a class="sidebar-link" data-view="cases">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 3v4M8 3v4M2 11h20"/></svg>
+        케이스 관리
+      </a>
+      <a class="sidebar-link" data-view="blog">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+        블로그 / 콘텐츠
+      </a>
+      <a class="sidebar-link" data-view="faqs">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3M12 17h.01"/></svg>
+        FAQ 편집
+      </a>
+
+      <div class="sidebar-section">AI &amp; Automation</div>
+      <a class="sidebar-link" data-view="chatbot">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+        AI 챗봇 설정
+      </a>
+      <a class="sidebar-link" data-view="automation">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+        자동화 룰
+      </a>
+
+      <div class="sidebar-section">Insights</div>
+      <a class="sidebar-link" data-view="kpi">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+        KPI 분석
+      </a>
+      <a class="sidebar-link" data-view="portal">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="7" r="4"/><path d="M5.5 21a6.5 6.5 0 0 1 13 0"/></svg>
+        클라이언트 포털
+      </a>
+
+      <div class="sidebar-section">System</div>
+      <a class="sidebar-link" data-view="settings">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        설정
+      </a>
+      <a class="sidebar-link" href="/" style="color:var(--steel)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+        메인페이지 열기 ↗
+      </a>
+    </nav>
+
+    <div class="sidebar-footer">
+      <div class="avatar" id="userAvatar">박</div>
+      <div>
+        <div style="font-weight:600;color:var(--ink-deep);font-size:12px" id="userName">박단용</div>
+        <div style="font-size:10px;color:var(--steel)" id="userEmail">endyd116@gmail.com</div>
+      </div>
+      <button id="logoutBtn" title="로그아웃">로그아웃</button>
+    </div>
+  </aside>
+
+  <!-- Main -->
+  <main class="admin-main">
+    <header class="admin-topbar">
+      <button class="adm-btn ghost menu-toggle" id="menuToggle" aria-label="메뉴 열기">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
+      </button>
+      <div>
+        <h1 id="viewTitle">대시보드</h1>
+        <div class="sub" id="viewSub">이번 주 운영 현황</div>
+      </div>
+      <div class="topbar-actions">
+        <button class="adm-btn ghost" id="exportBtn" title="데이터 내보내기">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
+          백업
+        </button>
+        <a class="adm-btn secondary" href="/" target="_blank">사이트 보기 ↗</a>
+      </div>
+    </header>
+
+    <section class="admin-content" id="viewRoot">
+      <!-- Views render here -->
+    </section>
+  </main>
+</div>
+
+<!-- Drawer (used by multiple views) -->
+<div class="drawer-overlay" id="drawerOverlay"></div>
+<aside class="drawer" id="drawer">
+  <div class="drawer-header">
+    <h2 id="drawerTitle">상세</h2>
+    <button class="adm-btn ghost" id="drawerClose">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18M6 6l12 12"/></svg>
+    </button>
+  </div>
+  <div class="drawer-body" id="drawerBody"></div>
+  <div class="drawer-footer" id="drawerFooter"></div>
+</aside>
+
+<!-- Toast container -->
+<div class="toast-container" id="toastContainer"></div>
+
+<!-- Scripts -->
+<script type="module" src="assets/js/store.js"></script>
+<script type="module" src="assets/js/admin-ui.js"></script>
+<script type="module" src="assets/js/admin-views.js"></script>
+<script type="module" src="assets/js/admin.js"></script>
+
+</body>
+</html>

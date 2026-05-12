@@ -1,0 +1,709 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>함께워크_SI — 대기업 SI 결과물, 1/2 가격에. 그리고 AI까지.</title>
+<meta name="description" content="대기업 SI 검증 기획자 + 풀스택 개발자, 둘이 만든 SI 팀. 외주 0%, 자체 풀스택. 같은 결과물 절반 가격, AI까지 내장합니다.">
+<meta name="theme-color" content="#0866FF">
+<meta property="og:title" content="함께워크_SI — 대기업 SI 1/2 가격, AI까지">
+<meta property="og:description" content="외주 없는 자체 풀스택, 38억+ 대기업 SI 레퍼런스. 견적 즉시 확인.">
+<meta property="og:type" content="website">
+
+<link rel="preconnect" href="https://cdn.jsdelivr.net">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/[email protected]/dist/web/static/pretendard.css">
+
+<link rel="stylesheet" href="assets/css/tokens.css">
+<link rel="stylesheet" href="assets/css/animations.css">
+<link rel="stylesheet" href="assets/css/main.css">
+</head>
+<body>
+
+<!-- Top progress bar -->
+<div class="progress-bar" id="progressBar"></div>
+
+<!-- Right-side dot navigation -->
+<nav class="dot-nav" id="dotNav" aria-label="Section navigation">
+  <button data-target="hero" data-label="홈" class="active" aria-label="Hero"></button>
+  <button data-target="who" data-label="우리가 필요한 분"></button>
+  <button data-target="pain" data-label="Industry Pain"></button>
+  <button data-target="promise" data-label="Our Promise"></button>
+  <button data-target="why" data-label="Why us"></button>
+  <button data-target="pricing" data-label="견적 계산"></button>
+  <button data-target="cases" data-label="레퍼런스"></button>
+  <button data-target="process" data-label="프로세스"></button>
+  <button data-target="team" data-label="팀"></button>
+  <button data-target="faq" data-label="FAQ"></button>
+  <button data-target="contact" data-label="상담"></button>
+</nav>
+
+<!-- Auto-tour toggle -->
+<button class="auto-tour" id="autoTour" aria-label="Auto tour mode">
+  <span class="pulse-dot"></span>
+  <span id="autoTourLabel">Auto Tour</span>
+</button>
+
+<!-- ============================================================
+     NAVIGATION
+     ============================================================ -->
+<nav class="nav">
+  <div class="container nav-inner">
+    <a href="#hero" class="brand">
+      <span class="brand-dot"></span>
+      <span>함께워크_SI</span>
+    </a>
+    <div class="nav-links">
+      <a href="#why">왜 우리</a>
+      <a href="#pricing">견적</a>
+      <a href="#cases">레퍼런스</a>
+      <a href="#process">프로세스</a>
+      <a href="#team">팀</a>
+      <a href="/blog">인사이트</a>
+      <div class="nav-tools">
+        <button class="icon-btn" id="themeToggle" aria-label="Toggle dark mode" title="다크모드">
+          <svg id="themeIcon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+        </button>
+        <a href="#contact" class="cta-btn">30분 무료 상담</a>
+      </div>
+    </div>
+  </div>
+</nav>
+
+<!-- ============================================================
+     HERO
+     ============================================================ -->
+<section id="hero" class="hero" data-section="hero">
+  <div class="hero-bg">
+    <div class="blob blob-1"></div>
+    <div class="blob blob-2"></div>
+    <div class="blob blob-3"></div>
+  </div>
+  <div class="container hero-inner reveal">
+    <span class="eyebrow">SI · AI Platform — 함께워크_SI</span>
+    <h1>
+      <span id="heroLine1">대기업 SI 결과물,</span><br>
+      <span class="accent" id="heroLine2">1/2 가격</span><span id="heroLine2Tail">에. 그리고 AI까지.</span>
+    </h1>
+    <p class="sub">
+      SI 전문기업 부장 출신 기획자 + 보안·플랫폼 풀스택 개발자, 둘이 만든 SI 팀.
+      외주 0%, 자체 풀스택. 같은 결과물 절반 가격, 그리고 코어에 AI를 박아드립니다.
+    </p>
+    <div class="hero-cta">
+      <a href="#contact" class="cta-btn">30분 무료 상담 받기</a>
+      <a href="#pricing" class="cta-btn outline">예상 견적 즉시 확인</a>
+    </div>
+    <div class="hero-stat-row stagger" id="heroStats">
+      <div class="hero-stat"><div class="v" data-count="38" data-suffix="억+">0</div><div class="l">대형 수주</div></div>
+      <div class="hero-stat"><div class="v" data-count="1" data-suffix="순위">0</div><div class="l">경쟁입찰 다수</div></div>
+      <div class="hero-stat"><div class="v" data-count="0" data-suffix="%">0</div><div class="l">외주 / 지원 인력</div></div>
+      <div class="hero-stat"><div class="v">AI Core</div><div class="l">내장</div></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     TRUST STRIP — marquee
+     ============================================================ -->
+<div class="trust">
+  <div class="container">
+    <div class="trust-label">대형 SI 수주·실행 레퍼런스</div>
+  </div>
+  <div class="marquee">
+    <div class="marquee-track">
+      <span class="trust-logo">삼성전자</span>
+      <span class="trust-logo">신세계</span>
+      <span class="trust-logo">미래에셋</span>
+      <span class="trust-logo">현대자동차</span>
+      <span class="trust-logo">대한사회복지회</span>
+      <span class="trust-logo">법무법인 바른</span>
+      <span class="trust-logo">국가과제 NFLUX</span>
+      <span class="trust-logo">합동참모본부</span>
+      <span class="trust-logo">삼성전자</span>
+      <span class="trust-logo">신세계</span>
+      <span class="trust-logo">미래에셋</span>
+      <span class="trust-logo">현대자동차</span>
+      <span class="trust-logo">대한사회복지회</span>
+      <span class="trust-logo">법무법인 바른</span>
+      <span class="trust-logo">국가과제 NFLUX</span>
+      <span class="trust-logo">합동참모본부</span>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================
+     WHO NEEDS US
+     ============================================================ -->
+<section id="who" data-section="who">
+  <div class="container">
+    <div class="reveal">
+      <span class="eyebrow">Who needs us</span>
+      <h2 class="section-title">이런 분들에게, 함께워크_SI가 필요합니다.</h2>
+      <p class="section-sub">사업을 플랫폼화하고 싶거나, 운영 전반에 AI를 박고 싶다면 — 한 팀이서 끝냅니다.</p>
+      <div class="accent-rule"></div>
+    </div>
+
+    <div class="cards-3 stagger">
+      <div class="card lift">
+        <div class="badge"><span class="badge-dot"></span><span>PLATFORM</span></div>
+        <div class="stat"><span class="v">All-in</span><span class="u">플랫폼화</span></div>
+        <hr>
+        <div class="h">내 사업을, 하나의 플랫폼으로.</div>
+        <div class="b">엑셀·수기·여러 SaaS로 흩어진 업무를 단일 플랫폼으로. 회원·결제·운영·관리자까지 풀스택으로 묶어 "내 사업의 OS"를 만들어드립니다.</div>
+      </div>
+      <div class="card lift">
+        <div class="badge"><span class="badge-dot"></span><span>AX TRANSFORMATION</span></div>
+        <div class="stat"><span class="v">-50%</span><span class="u">운영 인력</span></div>
+        <hr>
+        <div class="h">사업 전체를, AI로 다시 짭니다.</div>
+        <div class="b">기존 프로세스에 AI를 박아 운영 인력을 절반으로. 영업·CS·마케팅·보고서·재무까지 AI 중심으로 재설계합니다.</div>
+      </div>
+      <div class="card lift">
+        <div class="badge"><span class="badge-dot"></span><span>AI AGENT</span></div>
+        <div class="stat"><span class="v">24/7</span><span class="u">AI On</span></div>
+        <hr>
+        <div class="h">AI 에이전트가, 시스템 안에서.</div>
+        <div class="b">단순 챗봇이 아닙니다. 실시간 가격·자동 분류·매물 자동 등록·인사이트 리포트까지 코어 로직에 AI를 직접 운영합니다.</div>
+      </div>
+    </div>
+
+    <div class="takeaway reveal">
+      <span class="dot"></span>
+      <div class="text"><b>지금 필요한 건,</b> 외주 SI가 아니라 — 플랫폼·AX·AI를 한 팀이 동시에 설계하는 파트너입니다.</div>
+      <div class="ministats">
+        <div class="mini"><span class="v">1회</span><span class="l">통합 설계</span></div>
+        <div class="mini"><span class="v">-50%</span><span class="l">운영 인력</span></div>
+        <div class="mini"><span class="v">AI Core</span><span class="l">내장</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     INDUSTRY PAIN
+     ============================================================ -->
+<section id="pain" class="bg-soft" data-section="pain">
+  <div class="container">
+    <div class="reveal">
+      <span class="eyebrow" style="color:var(--critical)">Industry Pain</span>
+      <h2 class="section-title">지금 SI·AI 외주 시장은,<br>이렇게 망가져 있습니다.</h2>
+      <p class="section-sub">산출물을 "사는 것"이라 믿고 맡겼다가 — 다시 더 큰 비용을 치릅니다.</p>
+      <div class="accent-rule" style="background:var(--critical)"></div>
+    </div>
+
+    <div class="cards-3 stagger">
+      <div class="card crit lift glitch">
+        <div class="badge"><span class="badge-dot crit"></span><span>HIDDEN FEES</span></div>
+        <div class="stat"><span class="v crit">+60%</span><span class="u">추가 청구</span></div>
+        <hr>
+        <div class="h">완성 직전, 추가금 폭탄.</div>
+        <div class="b">견적 후 "이건 범위 밖이다", "이 기능은 별도다" 식의 추가 청구가 일상. 끝나갈수록 협상력은 약해지고 끌려갑니다.</div>
+      </div>
+      <div class="card crit lift glitch">
+        <div class="badge"><span class="badge-dot crit"></span><span>PROJECT DROP</span></div>
+        <div class="stat"><span class="v crit">30%</span><span class="u">중도 포기</span></div>
+        <hr>
+        <div class="h">완성 전에, 사라집니다.</div>
+        <div class="b">일정·인력 문제로 중간에 손을 떼는 외주가 흔합니다. 절반쯤 만들어진 코드만 남고, 다시 업체는 처음부터 다시 만듭니다.</div>
+      </div>
+      <div class="card crit lift glitch">
+        <div class="badge"><span class="badge-dot crit"></span><span>NO AFTER-CARE</span></div>
+        <div class="stat"><span class="v crit">0개월</span><span class="u">사후 책임</span></div>
+        <hr>
+        <div class="h">인도 직후, 잠적.</div>
+        <div class="b">검증 없이 "넘겼다"며 인도. 버그 수정 요청에 응답하지 않거나, 폐업해 사라집니다. 운영 중 문제 터지면 처음부터 다시 만들어야 합니다.</div>
+      </div>
+    </div>
+
+    <div class="takeaway reveal">
+      <span class="dot"></span>
+      <div class="text"><b>결국,</b> 산출물을 샀다고 믿었는데 — 절반은 추가금, 절반은 재발주 비용을 쓰게 됩니다.</div>
+      <div class="ministats">
+        <div class="mini"><span class="v">+60%</span><span class="l">추가금</span></div>
+        <div class="mini"><span class="v">30%</span><span class="l">중도 드롭</span></div>
+        <div class="mini"><span class="v">0개월</span><span class="l">사후 책임</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     OUR PROMISE
+     ============================================================ -->
+<section id="promise" data-section="promise">
+  <div class="container">
+    <div class="reveal">
+      <span class="eyebrow">Our Promise</span>
+      <h2 class="section-title">완성품이 아니라,<br>함께 가는 파트너를 사는 겁니다.</h2>
+      <p class="section-sub">구축부터 인도 · 6개월 무상 하자보증 · 운영 인계까지 — 한 팀이 끝까지 갑니다.</p>
+      <div class="accent-rule"></div>
+    </div>
+
+    <div class="cards-3 stagger">
+      <div class="card lift">
+        <div class="badge"><span class="badge-dot"></span><span>TRANSPARENT QUOTE</span></div>
+        <div class="stat"><span class="v">라인별</span><span class="u">투명 견적</span></div>
+        <hr>
+        <div class="h">견적도 청구도, 항목별 투명.</div>
+        <div class="b">페이지·기능·AI 라인을 분리 명시. 추가 요건은 별도 견적으로 진행하고, 잔금은 인도 후 검수 합격일에 정산합니다.</div>
+      </div>
+      <div class="card lift">
+        <div class="badge"><span class="badge-dot"></span><span>NO DROP-OUT</span></div>
+        <div class="stat"><span class="v">100%</span><span class="u">완주 약속</span></div>
+        <hr>
+        <div class="h">완성하면, 끝납니다.</div>
+        <div class="b">의사결정자 = 작업자. 단계별 검수와 주간 회의록을 업무화해 책임 소재를 명확히 합니다. 외주 재하청을 하지 않으니 드롭 리스크가 없습니다.</div>
+      </div>
+      <div class="card lift">
+        <div class="badge"><span class="badge-dot"></span><span>AFTER-CARE</span></div>
+        <div class="stat"><span class="v">6개월</span><span class="u">하자보증</span></div>
+        <hr>
+        <div class="h">인도 후에도, 함께 갑니다.</div>
+        <div class="b">무상 하자보증 + 소스 100% 양도 + 운영 인계 매뉴얼. 이후 유지보수도 동일 팀이 그대로. 폐업·잠적으로 인한 재발주가 없습니다.</div>
+      </div>
+    </div>
+
+    <div class="takeaway reveal">
+      <span class="dot"></span>
+      <div class="text"><b>결국,</b> SI·AI 구축은 완성품을 사는 게 아니라 — 완성부터 운영까지 함께 가는 파트너를 사는 겁니다.</div>
+      <div class="ministats">
+        <div class="mini"><span class="v">라인별</span><span class="l">투명 견적</span></div>
+        <div class="mini"><span class="v">100%</span><span class="l">완주</span></div>
+        <div class="mini"><span class="v">6개월</span><span class="l">하자보증</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     WHY US
+     ============================================================ -->
+<section id="why" class="bg-soft" data-section="why">
+  <div class="container">
+    <div class="reveal">
+      <span class="eyebrow">Why us</span>
+      <h2 class="section-title">검증 · 가격 · AI — 셋을<br>한 팀이 동시에 줍니다.</h2>
+      <p class="section-sub">대기업 SI 검증 × 풀스택 자체 개발 × AI 코어 운영. 셋을 동시에 가진 팀.</p>
+      <div class="accent-rule"></div>
+    </div>
+
+    <div class="metrics-row stagger">
+      <div class="metric">
+        <div class="v" data-count="38" data-suffix="억+">0</div>
+        <div class="l">PROVEN</div>
+        <div class="desc">삼성전자 TQMS 10억, 신세계 LCMS 8억, 사회복지회 5억 등 대형 경쟁입찰 1순위 다수. 대기업 SI 표준 그대로, 작은 팀의 속도로 실행합니다.</div>
+      </div>
+      <div class="metric">
+        <div class="v" data-count="50" data-suffix="%">0</div>
+        <div class="l">1/2 PRICE</div>
+        <div class="desc">외주 0%, 풀스택 자체 팀. 영업·관리 마진과 협력업체 마진을 걷어내, 대기업 동일 품질을 절반 가격으로 책임집니다.</div>
+      </div>
+      <div class="metric">
+        <div class="v">Core</div>
+        <div class="l">AI-NATIVE</div>
+        <div class="desc">챗봇으로 끝나는 SI가 아닙니다. 결제·운영·CS·재무·보고서까지 코어 워크플로우에 AI 에이전트를 직접 운영해 인력을 줄여드립니다.</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     PRICING CALCULATOR
+     ============================================================ -->
+<section id="pricing" data-section="pricing">
+  <div class="container">
+    <div class="reveal">
+      <span class="eyebrow">Pricing</span>
+      <h2 class="section-title">예상 견적, 즉시 확인하세요.</h2>
+      <p class="section-sub">
+        페이지 · 기능 · 외부 연동 · AI 라인을 분리해 명시합니다. 슬라이드로 규모를 조정하면 실시간으로 견적 범위를 계산해 보여드립니다.
+        실 견적은 RFP/요구사항 확인 후 ±15% 범위에서 조정됩니다.
+      </p>
+      <div class="accent-rule"></div>
+    </div>
+
+    <div class="calc-wrap reveal">
+
+      <div class="calc-panel">
+
+        <div class="calc-group">
+          <div class="calc-h">① 화면 · 페이지</div>
+          <div class="calc-row">
+            <div class="lbl">단순 페이지<span class="hint">도메인·목록·상세 등 정적 UI / 30만원·페이지</span></div>
+            <div class="calc-controls">
+              <button class="calc-num" data-act="dec" data-target="pages_simple">−</button>
+              <span class="calc-val" id="val_pages_simple">5</span>
+              <button class="calc-num" data-act="inc" data-target="pages_simple">+</button>
+            </div>
+          </div>
+          <div class="calc-row">
+            <div class="lbl">복잡 페이지<span class="hint">대시보드·관리자·필터·차트 / 80만원·페이지</span></div>
+            <div class="calc-controls">
+              <button class="calc-num" data-act="dec" data-target="pages_complex">−</button>
+              <span class="calc-val" id="val_pages_complex">3</span>
+              <button class="calc-num" data-act="inc" data-target="pages_complex">+</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="calc-group">
+          <div class="calc-h">② 기능 모듈</div>
+          <div class="calc-row">
+            <div class="lbl">기본 모듈<span class="hint">회원·로그인·CMS·게시판 / 200만원·모듈</span></div>
+            <div class="calc-controls">
+              <button class="calc-num" data-act="dec" data-target="mod_basic">−</button>
+              <span class="calc-val" id="val_mod_basic">2</span>
+              <button class="calc-num" data-act="inc" data-target="mod_basic">+</button>
+            </div>
+          </div>
+          <div class="calc-row">
+            <div class="lbl">고급 모듈<span class="hint">결제·구독·정산·알림·검색 / 500만원·모듈</span></div>
+            <div class="calc-controls">
+              <button class="calc-num" data-act="dec" data-target="mod_advanced">−</button>
+              <span class="calc-val" id="val_mod_advanced">1</span>
+              <button class="calc-num" data-act="inc" data-target="mod_advanced">+</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="calc-group">
+          <div class="calc-h">③ 외부 연동</div>
+          <div class="calc-row">
+            <div class="lbl">PG · SSO · ERP · 외부 API<span class="hint">건당 / 300만원·연동</span></div>
+            <div class="calc-controls">
+              <button class="calc-num" data-act="dec" data-target="integrations">−</button>
+              <span class="calc-val" id="val_integrations">1</span>
+              <button class="calc-num" data-act="inc" data-target="integrations">+</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="calc-group">
+          <div class="calc-h">④ AI 기능 (별도 라인)</div>
+          <label class="calc-check" data-ai="llm_simple">
+            <span class="opt-l"><input type="checkbox"> 단순 LLM 호출 (분류·요약·번역)</span>
+            <span class="opt-p">+200만</span>
+          </label>
+          <label class="calc-check" data-ai="rag">
+            <span class="opt-l"><input type="checkbox"> RAG 구축 (벡터DB + 임베딩 + 검색)</span>
+            <span class="opt-p">+1,200만</span>
+          </label>
+          <label class="calc-check" data-ai="agent">
+            <span class="opt-l"><input type="checkbox"> AI 에이전트 (도구 호출 · 워크플로우)</span>
+            <span class="opt-p">+1,800만</span>
+          </label>
+          <label class="calc-check" data-ai="finetune">
+            <span class="opt-l"><input type="checkbox"> 자체 모델 파인튜닝 / 이미지 모델</span>
+            <span class="opt-p">+2,500만</span>
+          </label>
+        </div>
+
+      </div>
+
+      <div class="calc-result">
+        <div class="calc-result-h">예상 견적</div>
+        <div class="calc-total"><span id="total_val">2,940</span><small> 만원</small></div>
+        <div class="calc-range" id="range_text">실 견적 범위: 2,500만 ~ 3,400만 (±15%)</div>
+
+        <svg class="calc-spark" id="calcSpark" viewBox="0 0 320 36" preserveAspectRatio="none">
+          <polyline id="sparkFill" fill="rgba(8,102,255,.18)" stroke="none" points=""/>
+          <polyline id="sparkLine" fill="none" stroke="rgba(122,168,255,.8)" stroke-width="2" points=""/>
+        </svg>
+
+        <div class="calc-breakdown">
+          <div class="calc-bd-row"><span class="l">화면 · 페이지</span><span class="v" id="bd_pages">390 만</span></div>
+          <div class="calc-bd-row"><span class="l">기능 모듈</span><span class="v" id="bd_modules">900 만</span></div>
+          <div class="calc-bd-row"><span class="l">외부 연동</span><span class="v" id="bd_integ">300 만</span></div>
+          <div class="calc-bd-row"><span class="l">AI 기능</span><span class="v" id="bd_ai">0 만</span></div>
+          <div class="calc-bd-row"><span class="l">QA · PM (25%)</span><span class="v" id="bd_overhead">397 만</span></div>
+        </div>
+
+        <a href="#contact" class="cta-btn" id="quoteToLeadBtn">이 견적으로 상담 요청</a>
+        <div class="calc-note">
+          ※ 토큰·벡터DB·GPU 등 AI 운영비는 월 별도 정산.<br>
+          ※ 인프라·도메인·SSL 등 운영 비용은 클라이언트가 직접 지불(시가)하거나 옵션으로 위임 가능.
+        </div>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     CASE STUDIES — carousel
+     ============================================================ -->
+<section id="cases" class="bg-soft" data-section="cases">
+  <div class="container">
+    <div class="reveal">
+      <span class="eyebrow">Case Studies</span>
+      <h2 class="section-title">삼성전자부터 국가과제까지,<br>대형 SI를 직접 만들었습니다.</h2>
+      <p class="section-sub">38억+ 대형 수주 · 경쟁입찰 1순위 다수. 대표 레퍼런스를 추렸습니다.</p>
+      <div class="accent-rule"></div>
+    </div>
+
+    <div class="cases-shell">
+      <div class="cases-track" id="casesTrack"></div>
+      <div class="cases-controls">
+        <div class="cases-dots" id="casesDots"></div>
+        <div class="cases-arrows">
+          <button class="cases-arrow" id="casesPrev" aria-label="Previous case">‹</button>
+          <button class="cases-arrow" id="casesNext" aria-label="Next case">›</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     PROCESS
+     ============================================================ -->
+<section id="process" data-section="process">
+  <div class="container">
+    <div class="reveal">
+      <span class="eyebrow">Process</span>
+      <h2 class="section-title">5단계로 끝납니다.<br>평균 일정은 일반 SI의 1/2.</h2>
+      <div class="accent-rule"></div>
+    </div>
+
+    <div class="process-shell">
+      <div class="process-row stagger" id="processRow">
+        <div class="process-step">
+          <div class="process-num">STEP 01</div>
+          <div class="process-h">무료 상담 · 견적</div>
+          <div class="process-d">30분 미팅으로 요구사항·예산·일정 정리. 라인별 분리 견적 제공.</div>
+          <div class="process-t">24시간 이내 회신</div>
+        </div>
+        <div class="process-step">
+          <div class="process-num">STEP 02</div>
+          <div class="process-h">계약 · 기획</div>
+          <div class="process-d">검수 기준·인도 기준·하자보증을 약관에 명시. 화면·기능·AI 라인 분리 IA.</div>
+          <div class="process-t">1~2주</div>
+        </div>
+        <div class="process-step">
+          <div class="process-num">STEP 03</div>
+          <div class="process-h">개발 · 단계 검수</div>
+          <div class="process-d">주간 회의록 업무화. 마일스톤별 사용자 검수 합격 후 다음 단계 진행.</div>
+          <div class="process-t">일정 SI의 1/2</div>
+        </div>
+        <div class="process-step">
+          <div class="process-num">STEP 04</div>
+          <div class="process-h">검수 · 인도</div>
+          <div class="process-d">AI 자동 QA + 단계별 사용자 검수. 검수 합격일 = 잔금 정산일.</div>
+          <div class="process-t">2주 검수</div>
+        </div>
+        <div class="process-step">
+          <div class="process-num">STEP 05</div>
+          <div class="process-h">사후관리</div>
+          <div class="process-d">6개월 무상 하자보증 + 소스 100% 양도 + 운영 인계 매뉴얼. 유지보수 동일 팀.</div>
+          <div class="process-t">6개월 보증</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     TEAM
+     ============================================================ -->
+<section id="team" class="bg-soft" data-section="team">
+  <div class="container">
+    <div class="intro-row">
+      <div class="reveal">
+        <span class="eyebrow">Team</span>
+        <h2 class="section-title">SI 전문기업 부장 +<br>보안·플랫폼 풀스택 개발자.</h2>
+        <p class="section-sub">둘 다 PM 경험. 기획자가 코드를 읽고, 개발자가 비즈니스를 압니다.</p>
+        <div class="accent-rule"></div>
+      </div>
+    </div>
+
+    <div class="team-grid stagger">
+      <div class="team-card">
+        <div class="team-role">Planner · PM</div>
+        <div class="team-name">박단용</div>
+        <div class="team-prev">前 송트벤이스 전략기획부 부장 · 프렌즈 대표이사</div>
+        <ul class="team-list">
+          <li>총 경력 10년, SI · 플랫폼 기획/PM 전문</li>
+          <li>대형 RFP 경쟁입찰 1순위 다수 (삼성전자 · 신세계 · 사회복지회 · 미래에셋)</li>
+          <li>경영학 학사 · 전산 부전공 · 데이터 모델링 전문가</li>
+          <li>기존 팀 실적 평균 30% 향상, 동일 인력 4.5배 생산성 개선</li>
+        </ul>
+      </div>
+      <div class="team-card">
+        <div class="team-role">Full-Stack Developer</div>
+        <div class="team-name">장영주</div>
+        <div class="team-prev">보안 · 플랫폼 · 금융권 풀스택 PM/PL</div>
+        <ul class="team-list">
+          <li>Java/Spring, React, Python, AWS, PostgreSQL, Kafka</li>
+          <li>국가과제 NFLUX (스마트 항만 · 가림 데이터허브) 핵심 개발</li>
+          <li>미래에셋생명 오픈소스 취약점 관리 시스템 (맘부리)</li>
+          <li>합동참모본부 보안훈련 시스템 · 다크트레이스 연계</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     FAQ
+     ============================================================ -->
+<section id="faq" data-section="faq">
+  <div class="container">
+    <div class="reveal">
+      <span class="eyebrow">FAQ</span>
+      <h2 class="section-title">자주 묻는 질문.</h2>
+      <div class="accent-rule"></div>
+    </div>
+
+    <div class="faq-search reveal">
+      <input type="search" id="faqSearch" placeholder="궁금한 키워드를 입력하세요 (예: 추가금, AI, 소스)">
+    </div>
+
+    <div class="faq-grid" id="faqGrid"></div>
+  </div>
+</section>
+
+<!-- ============================================================
+     CONTACT
+     ============================================================ -->
+<section id="contact" data-section="contact">
+  <div class="container">
+    <div class="contact-wrap">
+
+      <div class="contact-side">
+        <span class="eyebrow">Contact</span>
+        <h3>먼저, 30분 무료 상담.</h3>
+        <p>예산·일정·요구사항만 알려주시면 라인별 분리 견적과 AI 도입 시나리오를 함께 보내드립니다.</p>
+
+        <div class="contact-direct">
+          <div class="row"><span class="k">EMAIL</span><span class="v">endyd116@gmail.com</span></div>
+          <div class="row"><span class="k">PHONE</span><span class="v">010-2807-5242 (PM 박단용)</span></div>
+          <div class="row"><span class="k">CHANNEL</span><span class="v">폼송 · 이메일 · 직접 문의</span></div>
+          <div class="row"><span class="k">반응</span><span class="v">24시간 이내 회신 · NDA 즉시 가능</span></div>
+        </div>
+      </div>
+
+      <form class="form" id="leadForm">
+        <div class="row2">
+          <div class="field">
+            <label for="lf_name">이름 / 담당자</label>
+            <input id="lf_name" name="name" type="text" required placeholder="홍길동">
+          </div>
+          <div class="field">
+            <label for="lf_company">회사 / 소속</label>
+            <input id="lf_company" name="company" type="text" placeholder="(선택)">
+          </div>
+        </div>
+
+        <div class="row2">
+          <div class="field">
+            <label for="lf_email">이메일</label>
+            <input id="lf_email" name="email" type="email" required placeholder="email@company.com">
+          </div>
+          <div class="field">
+            <label for="lf_phone">연락처</label>
+            <input id="lf_phone" name="phone" type="tel" placeholder="010-0000-0000">
+          </div>
+        </div>
+
+        <div class="row2">
+          <div class="field">
+            <label for="lf_type">필요한 일</label>
+            <select id="lf_type" name="type">
+              <option>플랫폼 신규 구축</option>
+              <option>기존 시스템 고도화</option>
+              <option>AI 기능 추가 / AX 전환</option>
+              <option>AI 에이전트 구축</option>
+              <option>유지보수 · 인수</option>
+              <option>아직 정해지지 않음</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="lf_budget">예상 예산</label>
+            <select id="lf_budget" name="budget">
+              <option>~ 1,000만원</option>
+              <option>1,000만 ~ 3,000만원</option>
+              <option>3,000만 ~ 1억</option>
+              <option>1억 ~ 5억</option>
+              <option>5억 이상</option>
+              <option>정해지지 않음 / 견적 받고 결정</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="field">
+          <label for="lf_msg">간단 설명</label>
+          <textarea id="lf_msg" name="message" placeholder="어떤 사업이고, 무엇을 해결하고 싶은지 알려주세요. 견적 계산기 결과를 함께 보내주시면 좋습니다."></textarea>
+        </div>
+
+        <input type="hidden" id="lf_quote" name="quote">
+
+        <button type="submit" id="lfSubmit">상담 요청 보내기</button>
+        <div class="form-note">
+          ※ 제출 시 어드민의 [리드 관리]에 자동 등록됩니다. 24시간 이내 회신해 드립니다.
+        </div>
+      </form>
+
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     CHATBOT WIDGET
+     ============================================================ -->
+<button class="chatbot-fab pulse-ring" id="chatbotFab" aria-label="AI 상담 챗봇 열기">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+</button>
+
+<div class="chatbot-panel" id="chatbotPanel" role="dialog" aria-label="AI 상담">
+  <div class="chatbot-header">
+    <div class="who">
+      <div class="avatar">함</div>
+      <div>
+        <div class="name">함께워크 AI 상담</div>
+        <div class="status">평균 1초 응답 · RAG 기반</div>
+      </div>
+    </div>
+    <button class="chatbot-close" id="chatbotClose" aria-label="닫기">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18M6 6l12 12"/></svg>
+    </button>
+  </div>
+  <div class="chatbot-body" id="chatbotBody"></div>
+  <div class="chat-suggestions" id="chatSuggestions">
+    <button class="chat-suggestion">견적이 어떻게 산정되나요?</button>
+    <button class="chat-suggestion">AI 에이전트가 뭔가요?</button>
+    <button class="chat-suggestion">사후관리는 어떻게 되나요?</button>
+    <button class="chat-suggestion">소스코드는 누구 건가요?</button>
+  </div>
+  <div class="chatbot-input">
+    <input id="chatInput" type="text" placeholder="질문을 입력하세요…" autocomplete="off">
+    <button id="chatSend" aria-label="전송">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m22 2-7 20-4-9-9-4z"/></svg>
+    </button>
+  </div>
+</div>
+
+<!-- Toast container -->
+<div class="toast-container" id="toastContainer"></div>
+
+<!-- Footer -->
+<footer class="footer">
+  <div class="container footer-inner">
+    <div class="footer-brand">함께워크_SI</div>
+    <div class="footer-links">
+      <a href="/blog">인사이트</a>
+      <a href="/portal">클라이언트 포털</a>
+      <a href="/admin">관리자</a>
+      <a href="#contact">상담</a>
+    </div>
+    <div class="footer-meta">2026 · 함께워크_SI · endyd116@gmail.com</div>
+  </div>
+</footer>
+
+<!-- Scripts -->
+<script type="module" src="assets/js/store.js"></script>
+<script type="module" src="assets/js/animations.js"></script>
+<script type="module" src="assets/js/calculator.js"></script>
+<script type="module" src="assets/js/chatbot.js"></script>
+<script type="module" src="assets/js/main.js"></script>
+
+</body>
+</html>
