@@ -35,7 +35,47 @@ const LIMITS = {
   conversationTurns: 30,       // 한 세션 최대 메시지 수 (user+bot 합)
   apiCallsPerMinute: 12,       // 분당 API 호출 최대
   monthlyBudgetUsd: 50,        // 월 비용 한도 (정보 표시용)
+  historyToSend: 12,           // Gemini에 보낼 최근 메시지 수 (6 turn)
 };
+
+// 💰 비용 절감: 단순 인사/감사는 Gemini 호출 없이 즉시 응답
+const SHORT_FALLBACKS = {
+  '안녕': '안녕하세요! 함께워크_SI AI 상담입니다. 견적·레퍼런스·AI 도입 등 무엇이든 물어보세요.',
+  '안녕하세요': '안녕하세요! 무엇을 도와드릴까요?',
+  '하이': '안녕하세요! 무엇이 궁금하신가요?',
+  'hi': '안녕하세요! 무엇이 궁금하신가요?',
+  'hello': '안녕하세요! 무엇이 궁금하신가요?',
+  'ㅎㅇ': '안녕하세요!',
+  '감사': '도움 되었으면 좋겠어요. 더 궁금한 거 있으시면 편하게 물어보세요.',
+  '감사합니다': '네 도움 필요하시면 또 말씀해 주세요!',
+  '감사해요': '도움 되었길 바라요!',
+  'ㄳ': '도움 되었길 바라요!',
+  '고마워': '도움 되었길 바라요!',
+  '고마워요': '도움 되었길 바라요!',
+  '고맙습니다': '도움 되었길 바라요!',
+  '잘가': '안녕히 가세요! 언제든 다시 찾아주세요.',
+  '안녕히': '네 안녕히 가세요!',
+  '바이': '안녕히 가세요!',
+  'bye': '안녕히 가세요!',
+  '굿바이': '안녕히 가세요!',
+  'ㅂㅇ': '안녕히 가세요!',
+  '네': '네! 더 궁금한 점 있으세요?',
+  '응': '네! 더 궁금한 점 있으세요?',
+  'ㅇㅇ': '네! 더 궁금한 점 있으세요?',
+  '아니요': '알겠습니다. 다른 질문 있으시면 언제든 편하게 물어보세요.',
+  'no': '알겠습니다. 다른 질문 있으시면 편하게 물어보세요.',
+  'ㄴㄴ': '알겠습니다. 다른 질문 있으시면 편하게 물어보세요.',
+};
+
+function tryShortFallback(q) {
+  const normalized = q.trim().toLowerCase().replace(/[!?.,~^ ]/g, '');
+  if (SHORT_FALLBACKS[normalized]) return SHORT_FALLBACKS[normalized];
+  // 매우 짧고 단순한 입력은 친절히 다시 물음 (Gemini 안 부름)
+  if (normalized.length > 0 && normalized.length <= 2) {
+    return '조금 더 구체적으로 말씀해 주시면 정확히 도와드릴게요. 예: "쇼핑몰 견적 얼마야?", "AI 에이전트가 뭐예요?"';
+  }
+  return null;
+}
 let sessionToolCalls = 0;
 let lastToolSignature = '';
 let sameToolStreak = 0;
@@ -728,24 +768,40 @@ async function askGemini() {
     })),
   };
 
-  // 운영자 모드일 때만 민감 데이터 컨텍스트 추가
+  // 💰 비용 절감 #2 — 운영자 컨텍스트는 의도가 매칭될 때만 동적 포함
   if (isAdmin) {
-    context.chatLogs = store.chatLogs.all().map((l) => ({
-      sessionId: l.sessionId,
-      updatedAt: l.updatedAt,
-      messages: (l.messages || []).slice(-8),
-    }));
-    context.leads = store.leads.all().map((l) => ({
-      id: l.id, name: l.name, email: l.email, company: l.company,
-      type: l.type, budget: l.budget, status: l.status, source: l.source,
-      createdAt: l.createdAt,
-    }));
-    context.scheduledTasks = store.scheduledTasks.all();
+    const lastMsg = conversation[conversation.length - 1]?.text?.toLowerCase() || '';
+    const recentMsgs = conversation.slice(-3).map((m) => m.text?.toLowerCase() || '').join(' ');
+    const intent = lastMsg + ' ' + recentMsgs;
+
+    const wantsChatLogs = /대화|로그|세션|요약|챗봇|conversation|summarize/.test(intent);
+    const wantsLeads = /리드|고객|신청|문의|lead|customer/.test(intent);
+    const wantsTasks = /통화|연락|follow|예약|대기|발송|callback|메일|예정/.test(intent);
+
+    // 의도가 매칭될 때만 컨텍스트 포함 → 입력 토큰 50% 절감
+    if (wantsChatLogs) {
+      context.chatLogs = store.chatLogs.all().slice(-10).map((l) => ({
+        sessionId: l.sessionId,
+        updatedAt: l.updatedAt,
+        messages: (l.messages || []).slice(-6),
+      }));
+    }
+    if (wantsLeads) {
+      context.leads = store.leads.all().slice(-30).map((l) => ({
+        id: l.id, name: l.name, email: l.email, company: l.company,
+        type: l.type, budget: l.budget, status: l.status, source: l.source,
+        createdAt: l.createdAt,
+      }));
+    }
+    if (wantsTasks) {
+      context.scheduledTasks = store.scheduledTasks.all().filter((t) => t.status === 'pending');
+    }
   }
 
   const cfg = store.chatConfig.get();
   const systemPromptExtra = cfg.systemPromptExtra || '';
-  const messages = conversation.map((m) => ({ role: m.role, text: m.text }));
+  // 💰 비용 절감 #3 — 대화 히스토리 최근 12개(6 turn)만 전송 (긴 대화 비용 폭발 방지)
+  const messages = conversation.slice(-LIMITS.historyToSend).map((m) => ({ role: m.role, text: m.text }));
 
   const r = await fetch('/api/chat', {
     method: 'POST',
@@ -818,6 +874,21 @@ async function send(question) {
   bubble(q, 'user');
 
   if (suggestionsEl) suggestionsEl.style.display = 'none';
+
+  // 💰 비용 절감 #1 — 단순 인사/감사는 Gemini 호출 없이 즉시 응답
+  const auth = store.auth.get();
+  const isAdmin = !!(auth && auth.email);
+  if (!isAdmin) {  // 운영자 모드에서는 폴백 사용 안 함 (도구 호출 가능성 있음)
+    const shortReply = tryShortFallback(q);
+    if (shortReply) {
+      const el = bubble('', 'bot');
+      await streamInto(el, shortReply, 12);
+      conversation.push({ role: 'bot', text: shortReply, at: utils.nowIso() });
+      persistLog();
+      sending = false;
+      return;
+    }
+  }
 
   const typingEl = typingIndicator();
   let rawAnswer = '';

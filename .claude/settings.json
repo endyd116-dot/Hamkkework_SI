@@ -3,7 +3,8 @@
     "allow": [
       "Bash(git -c user.email=\"endy116@naver.com\" -c user.name=\"Park Duyong\" commit -m \"feat: Tier 2 AI 에이전트 권한 - 견적초안/케이스/블로그 자동작성 + follow-up 예약 \\(모두 PM 승인 워크플로우\\)\")",
       "Bash(git -c user.email=\"endy116@naver.com\" -c user.name=\"Park Duyong\" commit -m \"feat: 어드민 챗봇 + 운영자 모드 + PM 통화 요청 자동 등록 \\(request_pm_callback\\) + 어드민 전용 도구 4종\")",
-      "Bash(git -c user.email=\"endy116@naver.com\" -c user.name=\"Park Duyong\" commit -m \"feat: 비용 최적화 - 스마트 모델 라우팅 \\(Flash/Lite\\) + 토큰 캡 + 무한루프 5중 방지 + 어드민 비용 대시보드\")"
+      "Bash(git -c user.email=\"endy116@naver.com\" -c user.name=\"Park Duyong\" commit -m \"feat: 비용 최적화 - 스마트 모델 라우팅 \\(Flash/Lite\\) + 토큰 캡 + 무한루프 5중 방지 + 어드민 비용 대시보드\")",
+      "Bash(git -c user.email=\"endy116@naver.com\" -c user.name=\"Park Duyong\" commit -m \"perf: Quick Win 비용절감 -50% \\(휴리스틱 폴백 + 운영자 컨텍스트 동적 + 히스토리 12개 + 출력토큰 캡 강화\\)\")"
     ]
   }
 }

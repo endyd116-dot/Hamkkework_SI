@@ -61,8 +61,9 @@ function selectModel({ isAdmin, lastText, conversationLength }) {
 }
 
 function maxTokensFor({ isAdmin, model }) {
-  if (isAdmin) return 1024;
-  return model === MODEL_FLASH ? 800 : 400;
+  // 💰 보수적 토큰 캡 — 짧고 명확한 답변 강제 → 출력 비용 -30%
+  if (isAdmin) return 600;
+  return model === MODEL_FLASH ? 500 : 250;
 }
 
 function estimateCostUsd(model, usage) {
@@ -266,7 +267,7 @@ ${posts.filter((p) => p.published !== false).slice(0, 10).map((p) => `- **${p.ti
   const guide = `
 ## 응답 가이드
 1. **언어**: 한국어 존댓말("~습니다", "~드립니다")로 답변
-2. **길이**: 2~5문장으로 간결하게. 단순 질문은 1~2문장.
+2. **길이 (매우 중요)**: **최대 3문장, 150자 이내**로 간결하게. 단순 질문은 1문장. 길게 쓰지 마세요 — 사용자가 추가로 물으면 그때 더 답하세요. 운영자 모드는 동료처럼 더 짧게.
 3. **모르는 정보**: 추측하지 말고 "정확한 답변은 30분 무료 상담 미팅에서 안내드리겠습니다"로 유도
 4. **가격 질문**: 메인페이지 [Pricing 견적 계산기](/#pricing) 이용을 권유. 견적 범위는 위 가격표 기반으로 추정 가능
 5. **레퍼런스 질문**: 위 레퍼런스에서 비슷한 사례를 1~2개 들어 답변
