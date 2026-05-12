@@ -314,6 +314,161 @@ async function executeAction(action) {
       };
     }
 
+    // ====================================================
+    // 5. draft_quote — 견적서 초안 자동 작성 (PM 검토 후 발송)
+    // ====================================================
+    case 'draft_quote': {
+      if (!data.clientName) return { ok: false, message: '클라이언트명이 누락되었습니다' };
+      if (!Array.isArray(data.items) || !data.items.length) {
+        return { ok: false, message: '견적 항목이 비어있습니다' };
+      }
+      const sub = data.items.reduce((s, x) => s + (Number(x.amount) || 0), 0);
+      const overhead = Number(data.overhead) || 25;
+      const total = Math.round(sub * (1 + overhead / 100));
+      const q = store.quotes.add({
+        title: data.title || `${data.clientName} 견적서`,
+        clientName: data.clientName,
+        items: data.items,
+        overhead,
+        total,
+        notes: (data.notes || '') + `\n\n[챗봇 AI 자동 작성 · 세션 ${sessionId} · PM 검토 필요]`,
+        status: 'ai-draft',
+        aiSubmitted: true,
+      });
+      return {
+        ok: true,
+        message: `견적 초안 작성 완료 (${total.toLocaleString('ko-KR')} 만원)`,
+        card: {
+          icon: '📄',
+          title: `견적 초안: ${q.title}`,
+          rows: [
+            ['클라이언트', q.clientName],
+            ['항목 수', `${q.items.length}건`],
+            ['소계', `${sub.toLocaleString('ko-KR')} 만원`],
+            ['QA·PM', `${overhead}%`],
+            ['총액', `${total.toLocaleString('ko-KR')} 만원`],
+          ],
+          footer: '✓ 어드민 [견적/제안서]에 AI 초안으로 저장. 박두용 PM이 검토 후 정식 PDF 발행.',
+          tone: 'success',
+        },
+      };
+    }
+
+    // ====================================================
+    // 6. create_case_draft — 케이스 비공개 추가
+    // ====================================================
+    case 'create_case_draft': {
+      if (!data.title || !data.client) {
+        return { ok: false, message: '케이스 제목과 클라이언트가 필요합니다' };
+      }
+      const c = store.cases.add({
+        label: data.label || 'Case',
+        client: data.client,
+        title: data.title,
+        description: data.description || '',
+        features: data.features || [],
+        tags: data.tags || [],
+        amount: data.amount || '',
+        status: data.status || '',
+        year: data.year || new Date().getFullYear(),
+        theme: data.theme || 'blue',
+        icon: data.icon || '📦',
+        published: false,  // 비공개로 추가
+        aiDraft: true,
+      });
+      return {
+        ok: true,
+        message: `케이스 초안 추가 (${c.title})`,
+        card: {
+          icon: '💼',
+          title: `케이스 초안: ${c.label}`,
+          rows: [
+            ['클라이언트', c.client],
+            ['제목', c.title],
+            ['태그', (c.tags || []).join(', ') || '—'],
+            ['상태', '🔒 비공개'],
+          ],
+          footer: '✓ 어드민 [케이스 관리]에 비공개로 저장. 박두용 PM이 검토 후 공개 토글 ON.',
+          tone: 'info',
+        },
+      };
+    }
+
+    // ====================================================
+    // 7. draft_blog_post — 블로그 초안 자동 작성
+    // ====================================================
+    case 'draft_blog_post': {
+      if (!data.title || !data.content) {
+        return { ok: false, message: '블로그 제목과 본문이 필요합니다' };
+      }
+      const slug = data.slug || data.title.toLowerCase().replace(/\s+/g, '-').replace(/[^\w가-힣-]/g, '').slice(0, 60);
+      const p = store.posts.add({
+        title: data.title,
+        slug,
+        excerpt: data.excerpt || '',
+        content: data.content,
+        author: 'AI 초안',
+        tags: data.tags || [],
+        read_min: data.read_min || 5,
+        published_at: new Date().toISOString().slice(0, 10),
+        published: false,
+        aiDraft: true,
+      });
+      return {
+        ok: true,
+        message: `블로그 초안 작성 (${p.title})`,
+        card: {
+          icon: '📝',
+          title: `블로그 초안: ${p.title}`,
+          rows: [
+            ['요약', p.excerpt],
+            ['태그', (p.tags || []).join(', ') || '—'],
+            ['길이', `${(p.content || '').length}자`],
+            ['상태', '🔒 비공개 (미발행)'],
+          ],
+          footer: '✓ 어드민 [블로그/콘텐츠]에 AI 초안으로 저장. 박두용 PM이 편집·검토 후 [공개] 토글.',
+          tone: 'info',
+        },
+      };
+    }
+
+    // ====================================================
+    // 8. schedule_followup — 리드 follow-up 메일 예약
+    // ====================================================
+    case 'schedule_followup': {
+      if (!data.leadEmail || !data.subject || !data.body) {
+        return { ok: false, message: '이메일·제목·본문이 모두 필요합니다' };
+      }
+      const days = Number(data.daysFromNow) || 3;
+      const scheduledAt = new Date(Date.now() + days * 86400000).toISOString();
+      const t = store.scheduledTasks.add({
+        type: 'followup_email',
+        leadEmail: data.leadEmail,
+        leadName: data.leadName || '',
+        subject: data.subject,
+        body: data.body,
+        scheduledAt,
+        status: 'pending',
+        aiSubmitted: true,
+      });
+      return {
+        ok: true,
+        message: `Follow-up ${days}일 후 예약 완료`,
+        card: {
+          icon: '📨',
+          title: `Follow-up 예약: ${data.leadName || data.leadEmail}`,
+          rows: [
+            ['수신', data.leadEmail],
+            ['예약일', new Date(scheduledAt).toLocaleDateString('ko-KR')],
+            ['제목', data.subject],
+            ['상태', '⏰ 발송 대기'],
+          ],
+          footer: '✓ 어드민 [대시보드]에서 시간 도래 시 [지금 발송] 버튼으로 발송.',
+          tone: 'info',
+        },
+      };
+    }
+
     default:
       return { ok: false, message: `알 수 없는 도구: ${tool}` };
   }

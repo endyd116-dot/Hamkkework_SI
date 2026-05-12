@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git -c user.email=\"endy116@naver.com\" -c user.name=\"Park Duyong\" commit -m \"feat: Tier 2 AI 에이전트 권한 - 견적초안/케이스/블로그 자동작성 + follow-up 예약 \\(모두 PM 승인 워크플로우\\)\")"
+    ]
+  }
+}

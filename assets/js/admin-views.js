@@ -82,6 +82,45 @@ export function renderDashboard() {
       <div class="chart-wrap"><canvas id="leadsTrendChart"></canvas></div>
     </div>
 
+    ${(() => {
+      const tasks = store.scheduledTasks.all().filter(t => t.status === 'pending');
+      const now = Date.now();
+      const due = tasks.filter(t => new Date(t.scheduledAt).getTime() <= now);
+      const upcoming = tasks.filter(t => new Date(t.scheduledAt).getTime() > now);
+      if (!tasks.length) return '';
+      return `
+        <div class="adm-card">
+          <h3>🤖 AI 예약 작업 큐
+            <span style="font-size:11px;font-weight:400;color:var(--steel)">${due.length}건 발송 가능 · ${upcoming.length}건 대기</span>
+          </h3>
+          <div class="desc">AI 챗봇이 예약한 follow-up 메일입니다. 시간 도래 시 [지금 발송] 또는 [취소] 클릭.</div>
+          <table class="adm-table">
+            <thead><tr><th>수신</th><th>제목</th><th>예약일</th><th>상태</th><th></th></tr></thead>
+            <tbody>${tasks.map(t => {
+              const isDue = new Date(t.scheduledAt).getTime() <= now;
+              return `
+                <tr ${isDue ? 'style="background:var(--warning-soft)"' : ''}>
+                  <td>
+                    <b>${escapeHtml(t.leadName || '—')}</b>
+                    <div style="font-size:11px;color:var(--steel)">${escapeHtml(t.leadEmail || '')}</div>
+                  </td>
+                  <td style="font-size:13px">${escapeHtml(t.subject || '')}</td>
+                  <td style="font-size:12px;color:var(--steel)">${fmt.date(t.scheduledAt)}</td>
+                  <td>${isDue
+                    ? '<span class="tag warning">발송 가능</span>'
+                    : '<span class="tag info">⏰ 대기</span>'}</td>
+                  <td>
+                    ${isDue ? `<button class="adm-btn sm" data-action="send-task" data-id="${t.id}">지금 발송</button>` : ''}
+                    <button class="adm-btn sm ghost" data-action="cancel-task" data-id="${t.id}">취소</button>
+                  </td>
+                </tr>
+              `;
+            }).join('')}</tbody>
+          </table>
+        </div>
+      `;
+    })()}
+
     <div class="adm-card">
       <h3>최근 리드 <a href="#leads" class="adm-btn ghost sm" data-nav="leads">전체 보기 →</a></h3>
       ${recent.length === 0
@@ -161,6 +200,47 @@ export function mountDashboard() {
     e.preventDefault();
     window.navTo(b.dataset.nav);
   }));
+
+  // 🤖 AI scheduled task — send-now / cancel
+  $$('[data-action="send-task"]').forEach((btn) => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const t = store.scheduledTasks.byId(btn.dataset.id);
+      if (!t) return;
+      if (!window.confirm(`${t.leadName || t.leadEmail}님께 follow-up 메일을 지금 발송할까요?`)) return;
+      // open user mail client as fallback OR try server endpoint
+      let serverOk = false;
+      try {
+        const r = await fetch('/api/send-lead', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: t.leadName || t.leadEmail,
+            email: t.leadEmail,
+            type: 'follow-up',
+            message: `[자동 발송] ${t.subject}\n\n${t.body}`,
+          }),
+        });
+        serverOk = r.ok;
+      } catch {}
+      if (!serverOk) {
+        const mailto = `mailto:${encodeURIComponent(t.leadEmail)}?subject=${encodeURIComponent(t.subject)}&body=${encodeURIComponent(t.body)}`;
+        window.open(mailto, '_blank');
+      }
+      store.scheduledTasks.update(t.id, { status: 'sent', sentAt: utils.nowIso() });
+      toast(serverOk ? '서버를 통해 발송했습니다' : '메일 클라이언트를 열었습니다', 'success');
+      window.rerenderView?.();
+    });
+  });
+  $$('[data-action="cancel-task"]').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (!window.confirm('예약된 follow-up을 취소할까요?')) return;
+      store.scheduledTasks.remove(btn.dataset.id);
+      toast('예약이 취소되었습니다');
+      window.rerenderView?.();
+    });
+  });
 }
 
 const STAGE_LABELS = { new: '신규', consult: '상담', quote: '견적', contract: '계약', won: '완료', lost: '실주' };
@@ -365,11 +445,18 @@ export function renderQuotes() {
         : `<table class="adm-table">
             <thead><tr><th>제목</th><th>클라이언트</th><th>금액</th><th>상태</th><th>작성</th><th></th></tr></thead>
             <tbody>${quotes.map((q) => `
-              <tr>
-                <td><b>${escapeHtml(q.title || '제목 없음')}</b></td>
+              <tr ${q.status === 'ai-draft' ? 'style="background:var(--cobalt-softer)"' : ''}>
+                <td>
+                  <b>${escapeHtml(q.title || '제목 없음')}</b>
+                  ${q.aiSubmitted || q.status === 'ai-draft'
+                    ? '<span style="display:inline-block;font-size:9px;font-weight:800;background:linear-gradient(135deg,#0866FF,#7AA8FF);color:#fff;padding:2px 6px;border-radius:999px;margin-left:6px;letter-spacing:0.04em" title="AI 챗봇이 작성한 초안">🤖 AI 초안</span>'
+                    : ''}
+                </td>
                 <td>${escapeHtml(q.clientName || '—')}</td>
                 <td style="color:var(--cobalt-deep);font-weight:700">${fmt.num(q.total || 0)} 만원</td>
-                <td>${stageTag(q.status === 'sent' ? 'consult' : (q.status === 'accepted' ? 'won' : 'new'))}</td>
+                <td>${q.status === 'ai-draft'
+                  ? '<span class="tag warning">검토 필요</span>'
+                  : stageTag(q.status === 'sent' ? 'consult' : (q.status === 'accepted' ? 'won' : 'new'))}</td>
                 <td style="color:var(--steel);font-size:12px">${fmt.rel(q.createdAt)}</td>
                 <td>
                   <button class="adm-btn sm secondary" data-action="edit-quote" data-id="${q.id}">편집</button>
@@ -1005,10 +1092,13 @@ export function renderCases() {
         `<table class="adm-table">
           <thead><tr><th>라벨</th><th>클라이언트</th><th>제목</th><th>금액</th><th>공개</th><th></th></tr></thead>
           <tbody>${cases.map((c) => `
-            <tr>
+            <tr ${c.aiDraft ? 'style="background:var(--cobalt-softer)"' : ''}>
               <td><span class="tag cobalt">${escapeHtml(c.label||'')}</span></td>
               <td>${escapeHtml(c.client||'')}</td>
-              <td><b>${escapeHtml(c.title||'')}</b></td>
+              <td>
+                <b>${escapeHtml(c.title||'')}</b>
+                ${c.aiDraft ? '<span style="display:inline-block;font-size:9px;font-weight:800;background:linear-gradient(135deg,#0866FF,#7AA8FF);color:#fff;padding:2px 6px;border-radius:999px;margin-left:6px" title="AI 챗봇이 작성한 초안">🤖 AI 초안</span>' : ''}
+              </td>
               <td style="color:var(--cobalt-deep);font-weight:700">${escapeHtml(c.amount||'')}</td>
               <td><label class="switch"><input type="checkbox" ${c.published!==false?'checked':''} data-id="${c.id}" data-action="toggle-case"><span class="slider"></span></label></td>
               <td>
@@ -1107,8 +1197,12 @@ export function renderBlog() {
         `<table class="adm-table">
           <thead><tr><th>제목</th><th>저자</th><th>발행일</th><th>태그</th><th>공개</th><th></th></tr></thead>
           <tbody>${posts.map((p) => `
-            <tr>
-              <td><b>${escapeHtml(p.title||'')}</b><div style="font-size:11px;color:var(--steel);margin-top:2px">${escapeHtml(p.excerpt||'')}</div></td>
+            <tr ${p.aiDraft ? 'style="background:var(--cobalt-softer)"' : ''}>
+              <td>
+                <b>${escapeHtml(p.title||'')}</b>
+                ${p.aiDraft ? '<span style="display:inline-block;font-size:9px;font-weight:800;background:linear-gradient(135deg,#0866FF,#7AA8FF);color:#fff;padding:2px 6px;border-radius:999px;margin-left:6px" title="AI 챗봇이 작성한 초안">🤖 AI 초안</span>' : ''}
+                <div style="font-size:11px;color:var(--steel);margin-top:2px">${escapeHtml(p.excerpt||'')}</div>
+              </td>
               <td>${escapeHtml(p.author||'—')}</td>
               <td style="font-size:12px;color:var(--steel)">${fmt.date(p.published_at)}</td>
               <td>${(p.tags||[]).map((t)=>`<span class="tag">${escapeHtml(t)}</span>`).join(' ')}</td>

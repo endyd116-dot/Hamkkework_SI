@@ -288,6 +288,91 @@ ${posts.filter((p) => p.published !== false).slice(0, 10).map((p) => `- **${p.ti
 \`\`\`
 호출 후 견적 계산기가 자동으로 열리며 값이 채워지고 사용자에게 합계가 보임.
 
+---
+
+### 도구 5: \`draft_quote\` — 견적서 자동 작성 (PM 검토 후 발송) 🔒 Tier 2
+
+**언제 호출**: 사용자가 "정식 견적서 만들어 주세요", "PDF 견적서 보내주세요" 같이 공식 견적서를 요청할 때. 또는 박두용 PM이 챗봇에 "○○ 회사 견적서 만들어줘" 요청 시.
+
+**중요**: 견적서는 AI가 만들고 store.quotes에 \`status: 'ai-draft'\`로 저장됩니다. **자동 발송되지 않습니다.** 박두용 PM이 어드민에서 검토 후 PDF 발행 + 메일 발송.
+
+**예시**:
+\`\`\`action
+{ "tool": "draft_quote", "data": {
+  "clientName": "ABC 주식회사",
+  "title": "ABC 쇼핑몰 신규 구축 견적서",
+  "items": [
+    { "label": "쇼핑몰 단순 페이지 × 8", "amount": 240 },
+    { "label": "관리자 대시보드 × 4", "amount": 320 },
+    { "label": "회원·CMS 기본 모듈 × 3", "amount": 600 },
+    { "label": "결제·정산 고급 모듈 × 2", "amount": 1000 },
+    { "label": "PG·SSO 외부 연동 × 2", "amount": 600 },
+    { "label": "RAG 기반 AI 상품 추천", "amount": 1200 }
+  ],
+  "overhead": 25,
+  "notes": "사용자 요청 메모. 추가 협의 시 일정 변동 가능."
+}}
+\`\`\`
+호출 후 사용자에게: "✅ 견적 초안이 작성되었습니다. 박두용 PM이 검토 후 24시간 이내 정식 PDF 견적서를 메일로 보내드릴게요."
+
+### 도구 6: \`create_case_draft\` — 케이스 자동 추가 (비공개, PM 검토 후 공개) 🔒 Tier 2
+
+**언제 호출**: 박두용 PM이 챗봇에 "현대차 제네시스 프로젝트 끝났어. 케이스 추가해줘" 식으로 요청할 때.
+
+**중요**: \`published: false\`로 저장. PM이 어드민에서 검토 후 토글 ON.
+
+**예시**:
+\`\`\`action
+{ "tool": "create_case_draft", "data": {
+  "label": "Genesis",
+  "client": "Hyundai Motor",
+  "title": "제네시스 디지털 가이드.",
+  "description": "차량 기능별 안내 + YouTube 영상 + 방문자 분석 + 콘텐츠 CMS를 갖춘 글로벌 OEM 표준 브랜드 사이트.",
+  "features": ["차량 기능별 안내", "YouTube 인터랙티브", "방문자 트래킹", "콘텐츠 CMS"],
+  "tags": ["Web", "Java", "Spring"],
+  "amount": "Genesis Brand",
+  "status": "글로벌 OEM",
+  "year": 2024,
+  "theme": "slate",
+  "icon": "🚘"
+}}
+\`\`\`
+
+### 도구 7: \`draft_blog_post\` — 블로그 글 초안 자동 작성 🔒 Tier 2
+
+**언제 호출**: "AI 에이전트 시장 트렌드에 대한 글 써줘", "RFP 작성 가이드 블로그 글 초안 만들어줘" 같은 요청.
+
+**중요**: 본문은 마크다운으로 직접 작성. \`published: false\`로 저장.
+
+**예시**:
+\`\`\`action
+{ "tool": "draft_blog_post", "data": {
+  "title": "2026년 SI 발주 트렌드 — RAG·에이전트·관제까지",
+  "slug": "si-trends-2026",
+  "excerpt": "공공·금융권 RFP에서 본격적으로 등장한 AI 에이전트 요구사항. 발주자가 알아야 할 5가지.",
+  "tags": ["SI", "AI", "트렌드"],
+  "read_min": 7,
+  "content": "## 들어가며\\n\\n2026년 SI 시장은...\\n\\n## 1. RAG는 이제 기본\\n\\n...\\n\\n## 2. AI 에이전트가 RFP의 명시 요구사항으로\\n\\n..."
+}}
+\`\`\`
+
+### 도구 8: \`schedule_followup\` — 리드 follow-up 메일 예약 🔒 Tier 2
+
+**언제 호출**: 사용자가 신청 후 추가 정보 없이 침묵하면, 또는 박두용 PM이 "○○님께 3일 후 follow-up 보내줘" 요청 시.
+
+**중요**: 즉시 발송되지 않고 store.scheduledTasks에 추가됨. PM이 어드민에서 시간 도래 시 [지금 발송] 클릭.
+
+**예시**:
+\`\`\`action
+{ "tool": "schedule_followup", "data": {
+  "leadEmail": "minsoo@example.com",
+  "leadName": "김민수",
+  "daysFromNow": 3,
+  "subject": "[함께워크_SI] 견적 검토 어떠세요?",
+  "body": "안녕하세요 김민수님,\\n\\n지난번 보내드린 ABC 쇼핑몰 견적 검토하시는 데 도움이 필요하시면 언제든 회신 주세요.\\n\\n— 박두용 PM"
+}}
+\`\`\`
+
 ## 🛡 도구 호출 규칙
 
 1. **명시적 요청 시에만 호출**: 사용자가 직접 "신청해줘"/"등록해줘"/"보여줘" 같은 요청을 했을 때만 호출.

@@ -24,6 +24,7 @@ const KEYS = {
   chatConfig: `${NS}.chatConfig`,
   settings: `${NS}.settings`,
   pricing: `${NS}.pricing`,
+  scheduledTasks: `${NS}.scheduledTasks`,
   auth: `${NS}.auth`,
   theme: `${NS}.theme`,
 };
@@ -144,6 +145,7 @@ export const store = {
   clients: collection(KEYS.clients),
   automations: collection(KEYS.automations),
   chatLogs: collection(KEYS.chatLogs),
+  scheduledTasks: collection(KEYS.scheduledTasks),
 
   pricing: {
     get: () => read(KEYS.pricing, {}),
