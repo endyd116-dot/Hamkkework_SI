@@ -57,11 +57,25 @@ export function renderDashboard() {
 
   const recent = [...leads].sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || '')).slice(0, 6);
 
-  // 💰 AI 비용 계산 (이번 달)
+  // 💰 AI 비용 계산 (이번 달 + 일일 추세 + 어뷰즈 감지)
   const usageLog = store.usageLog.all();
+  const now = Date.now();
+  const today0 = new Date(); today0.setHours(0, 0, 0, 0);
+  const yesterday0 = new Date(today0); yesterday0.setDate(yesterday0.getDate() - 1);
+  const weekAgo = new Date(today0); weekAgo.setDate(weekAgo.getDate() - 7);
   const monthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1).getTime();
-  const monthLog = usageLog.filter((e) => new Date(e.createdAt).getTime() >= monthStart);
-  const monthCost = monthLog.reduce((s, e) => s + (e.cost_usd || 0), 0);
+
+  const at = (e) => new Date(e.createdAt).getTime();
+  const monthLog = usageLog.filter((e) => at(e) >= monthStart);
+  const todayLog = usageLog.filter((e) => at(e) >= today0.getTime());
+  const yesterdayLog = usageLog.filter((e) => at(e) >= yesterday0.getTime() && at(e) < today0.getTime());
+  const weekLog = usageLog.filter((e) => at(e) >= weekAgo.getTime() && at(e) < today0.getTime());
+
+  const sumCost = (arr) => arr.reduce((s, e) => s + (e.cost_usd || 0), 0);
+  const monthCost = sumCost(monthLog);
+  const todayCost = sumCost(todayLog);
+  const yesterdayCost = sumCost(yesterdayLog);
+  const weekAvgCost = sumCost(weekLog) / 7;
   const monthTokensIn = monthLog.reduce((s, e) => s + (e.tokens_in || 0), 0);
   const monthTokensOut = monthLog.reduce((s, e) => s + (e.tokens_out || 0), 0);
   const flashCalls = monthLog.filter((e) => e.tier === 'flash').length;
@@ -69,6 +83,24 @@ export function renderDashboard() {
   const BUDGET = 50;
   const usagePct = Math.min(100, (monthCost / BUDGET) * 100);
   const usageColor = usagePct >= 100 ? 'var(--critical)' : usagePct >= 80 ? 'var(--warning)' : 'var(--cobalt)';
+
+  // 일일 추세 — 어제 대비 +30% 또는 7일평균 대비 +50% 증가 시 경고
+  const yesterdayDelta = yesterdayCost > 0 ? ((todayCost - yesterdayCost) / yesterdayCost) * 100 : 0;
+  const weekDelta = weekAvgCost > 0 ? ((todayCost - weekAvgCost) / weekAvgCost) * 100 : 0;
+  const trendAlert = todayCost > 0 && (yesterdayDelta > 30 || weekDelta > 50);
+
+  // 🚨 어뷰즈 감지 — 최근 1시간 내 같은 세션이 30회+ 호출
+  const oneHourAgo = now - 60 * 60 * 1000;
+  const recentLog = usageLog.filter((e) => at(e) >= oneHourAgo);
+  const sessionCounts = {};
+  recentLog.forEach((e) => {
+    const sid = e.sessionId || 'unknown';
+    sessionCounts[sid] = (sessionCounts[sid] || 0) + 1;
+  });
+  const suspiciousSessions = Object.entries(sessionCounts)
+    .filter(([_, n]) => n >= 30)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5);
 
   return `
     <div class="kpi-row">
@@ -118,7 +150,49 @@ export function renderDashboard() {
 
       ${usagePct >= 80 ? `
         <div style="margin-top:14px;padding:10px 14px;background:var(--warning-soft);border-radius:var(--r-md);font-size:12px;color:#92400E">
-          ⚠️ <b>예산 80% 도달.</b> 트래픽이 계속되면 곧 한도 초과합니다. 시스템 프롬프트를 압축하거나 모든 호출을 Lite로 전환하세요 (어드민 → 설정 → 환경변수).
+          ⚠️ <b>예산 80% 도달.</b> 트래픽이 계속되면 곧 한도 초과합니다. 시스템 프롬프트를 압축하거나 모든 호출을 Lite로 전환하세요.
+        </div>
+      ` : ''}
+    </div>
+
+    <!-- 📊 일일 추세 카드 (Top 11) -->
+    <div class="adm-card">
+      <h3>📊 일일 비용 추세
+        <span style="font-size:12px;font-weight:400;color:var(--steel)">오늘 vs 어제 vs 7일 평균</span>
+      </h3>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px">
+        <div style="padding:14px 16px;background:var(--surface-softer);border-radius:var(--r-md);border-left:3px solid var(--cobalt)">
+          <div style="font-size:10px;font-weight:700;color:var(--steel);text-transform:uppercase;letter-spacing:.06em">오늘</div>
+          <div style="font-size:22px;font-weight:800;color:var(--ink-deep);margin-top:4px">$${todayCost.toFixed(4)}</div>
+          <div style="font-size:11px;color:var(--steel);margin-top:2px">${todayLog.length}회 호출</div>
+        </div>
+        <div style="padding:14px 16px;background:var(--surface-softer);border-radius:var(--r-md)">
+          <div style="font-size:10px;font-weight:700;color:var(--steel);text-transform:uppercase;letter-spacing:.06em">어제</div>
+          <div style="font-size:22px;font-weight:800;color:var(--ink);margin-top:4px">$${yesterdayCost.toFixed(4)}</div>
+          <div style="font-size:11px;color:${yesterdayDelta > 30 ? 'var(--critical)' : (yesterdayDelta < -10 ? 'var(--success)' : 'var(--steel)')};margin-top:2px">
+            ${yesterdayDelta > 0 ? '+' : ''}${yesterdayDelta.toFixed(0)}% 대비
+          </div>
+        </div>
+        <div style="padding:14px 16px;background:var(--surface-softer);border-radius:var(--r-md)">
+          <div style="font-size:10px;font-weight:700;color:var(--steel);text-transform:uppercase;letter-spacing:.06em">7일 평균</div>
+          <div style="font-size:22px;font-weight:800;color:var(--ink);margin-top:4px">$${weekAvgCost.toFixed(4)}</div>
+          <div style="font-size:11px;color:${weekDelta > 50 ? 'var(--critical)' : 'var(--steel)'};margin-top:2px">
+            ${weekDelta > 0 ? '+' : ''}${weekDelta.toFixed(0)}% 대비
+          </div>
+        </div>
+      </div>
+      ${trendAlert ? `
+        <div style="margin-top:12px;padding:10px 14px;background:var(--warning-soft);border-radius:var(--r-md);font-size:12px;color:#92400E">
+          ⚠️ <b>오늘 비용이 평소보다 ${yesterdayDelta > weekDelta ? `어제 대비 +${yesterdayDelta.toFixed(0)}%` : `평균 대비 +${weekDelta.toFixed(0)}%`} 높습니다.</b> 트래픽 급증이나 어뷰즈 가능성 확인 권장.
+        </div>
+      ` : ''}
+      ${suspiciousSessions.length > 0 ? `
+        <div style="margin-top:12px;padding:12px 14px;background:var(--critical-soft);border-radius:var(--r-md);font-size:12px;color:var(--critical)">
+          🚨 <b>어뷰즈 의심 세션 ${suspiciousSessions.length}건</b> (최근 1시간 내 30회+ 호출)
+          <div style="margin-top:8px;font-family:var(--font-mono);font-size:11px;color:var(--ink)">
+            ${suspiciousSessions.map(([s, n]) => `${s.slice(-8)}: ${n}회`).join(' · ')}
+          </div>
+          <div style="margin-top:6px;font-size:11px;color:var(--steel)">대처: Netlify 대시보드에서 해당 세션의 IP 차단 또는 챗봇 임시 비활성화 검토</div>
         </div>
       ` : ''}
     </div>
