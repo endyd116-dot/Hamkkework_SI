@@ -170,21 +170,52 @@ EMAIL_TO=endyd116@gmail.com
 SLACK_WEBHOOK_URL=https://hooks.slack.com/...  (선택)
 ```
 
-### AI 챗봇 → 진짜 RAG (`chat.js`)
+### AI 챗봇 — Gemini 3.0 Flash (이미 구현됨)
 
-```bash
-# 환경변수
-ANTHROPIC_API_KEY=sk-ant-...
+`netlify/functions/chat.js`는 이미 **Gemini 3.0 Flash**에 연결되어 있습니다. 시스템 프롬프트에 **플랫폼의 모든 정보**(회사 소개, 가격표, 케이스, FAQ, 5단계 프로세스, 응답 가이드)를 자동 주입하는 **context-injection RAG** 방식입니다.
 
-# 그리고 Supabase pgvector 또는 Pinecone에
-# - 사업소개서 텍스트
-# - 케이스 설명
-# - 가격표
-# - FAQ
-# 를 임베딩해 저장. 질문 들어오면 top-5 검색 + Claude로 응답 생성.
+#### 환경변수 설정 (필수)
+
+**방법 1 — Netlify Dashboard (권장)**
+1. https://app.netlify.com/projects/hamkkework-si/configuration/env 접속
+2. [Add a variable] 클릭
+3. Key: `GEMINI_API_KEY`, Value: Google AI Studio에서 발급받은 키
+4. (선택) `GEMINI_MODEL` = `gemini-3.0-flash` (기본값. 다른 모델 사용 시 `gemini-3.0-pro` 등으로 변경)
+5. 저장 후 [Trigger deploy]
+
+**방법 2 — Netlify CLI**
+```powershell
+netlify env:set GEMINI_API_KEY "AIza..."
+netlify env:set GEMINI_MODEL "gemini-3.0-flash"
+netlify deploy --prod
 ```
 
-`chat.js` 하단에 Anthropic SDK 호출 스캐폴드가 포함되어 있습니다.
+#### 작동 방식
+
+```
+사용자 질문
+   ↓
+프론트엔드 (assets/js/chatbot.js)
+   ↓
+   • 대화 히스토리 + 플랫폼 상태(케이스/FAQ/가격) 수집
+   ↓
+POST /api/chat
+   ↓
+Netlify Function (chat.js)
+   ↓
+   • 시스템 프롬프트에 RAG 컨텍스트 주입
+   • Gemini 3.0 Flash 호출
+   ↓
+응답 → 클라이언트 타이핑 애니메이션으로 렌더
+   ↓
+대화 로그 저장 (어드민 → AI 챗봇에서 조회)
+```
+
+어드민 → AI 챗봇 설정에서:
+- API 연결 상태 실시간 확인 (토큰 사용량 포함)
+- 시스템 프롬프트에 **추가 지침** 주입 가능 (이벤트 안내, 응답 톤 등)
+- 폴백 인텐트 (API 실패 시 사용)
+- 대화 로그 조회
 
 ---
 

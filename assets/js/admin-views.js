@@ -1155,15 +1155,42 @@ export function renderChatbot() {
   const logs = store.chatLogs.all();
   return `
     <div class="adm-card">
-      <h3>AI 챗봇 설정</h3>
-      <div class="desc">메인페이지 우하단의 챗봇 위젯이 사용하는 RAG-lite 응답 규칙입니다. 키워드별 인텐트로 운영합니다.</div>
+      <h3>🤖 Gemini AI 챗봇 — 연결 상태
+        <button class="adm-btn sm secondary" id="cb_testApi">API 테스트</button>
+      </h3>
+      <div class="desc">
+        메인페이지 우하단의 챗봇이 <b>Gemini 3.0 Flash</b>에 연결되어 플랫폼의 모든 정보(가격표·케이스·FAQ·약속·프로세스)를 컨텍스트로 답변합니다.
+        Gemini API 호출이 실패할 경우 자동으로 아래 규칙 기반(인텐트)으로 폴백합니다.
+      </div>
+      <div id="cb_status" style="padding:14px;border-radius:var(--r-md);background:var(--surface-soft);font-size:13px;line-height:1.6">
+        <div style="color:var(--steel)">API 상태 확인 중…</div>
+      </div>
+      <div style="margin-top:14px;padding:14px;background:var(--cobalt-soft);border-radius:var(--r-md);font-size:12px;color:var(--cobalt-deep);line-height:1.6">
+        <b>환경변수 설정 (Netlify Dashboard → Site settings → Environment variables)</b><br>
+        <code style="font-family:var(--font-mono);background:rgba(0,0,0,.05);padding:1px 6px;border-radius:4px">GEMINI_API_KEY</code> = Google AI Studio에서 발급받은 키 (<b>필수</b>)<br>
+        <code style="font-family:var(--font-mono);background:rgba(0,0,0,.05);padding:1px 6px;border-radius:4px">GEMINI_MODEL</code> = gemini-3.0-flash (선택, 기본값)
+      </div>
+    </div>
 
-      <div class="adm-field"><label>인사 메시지</label><textarea id="cb_greeting">${escapeHtml(cfg.greeting||'')}</textarea></div>
-      <div class="adm-field"><label>매칭 실패 시 응답</label><textarea id="cb_fallback">${escapeHtml(cfg.fallback||'')}</textarea></div>
+    <div class="adm-card">
+      <h3>응답 가이드 / 시스템 프롬프트 추가 지침</h3>
+      <div class="desc">이 텍스트는 Gemini의 시스템 프롬프트 끝에 추가됩니다. 회사 정보·가격·케이스는 자동으로 주입되니, 여기에는 <b>응답 톤·금지 사항·특별 안내</b>만 적어주세요.</div>
+      <div class="adm-field">
+        <label>추가 지침 (선택)</label>
+        <textarea id="cb_systemExtra" style="min-height:120px" placeholder="예: 답변은 항상 친근한 반말로 한다 / 5월 한정 이벤트가 있을 경우 안내한다 / 특정 기술 스택은 권하지 않는다 등">${escapeHtml(cfg.systemPromptExtra||'')}</textarea>
+      </div>
+      <div class="adm-row">
+        <div class="adm-field"><label>인사 메시지</label><textarea id="cb_greeting">${escapeHtml(cfg.greeting||'')}</textarea></div>
+        <div class="adm-field"><label>매칭 실패 시 폴백 응답</label><textarea id="cb_fallback">${escapeHtml(cfg.fallback||'')}</textarea></div>
+      </div>
+    </div>
 
-      <h3 style="margin-top:24px">인텐트 (키워드 → 응답)</h3>
+    <div class="adm-card">
+      <h3>폴백 인텐트 (Gemini 미연결 시 사용)
+        <button class="adm-btn ghost sm" id="cb_addIntent">+ 인텐트 추가</button>
+      </h3>
+      <div class="desc">API 호출이 실패할 경우에만 사용됩니다. 평소엔 Gemini가 모든 응답을 처리합니다.</div>
       <div id="cb_intents" style="display:grid;gap:8px"></div>
-      <button class="adm-btn ghost sm" id="cb_addIntent" style="margin-top:8px">+ 인텐트 추가</button>
 
       <div style="margin-top:16px;display:flex;gap:8px">
         <button class="adm-btn" id="cb_save">전체 저장</button>
@@ -1245,10 +1272,83 @@ export function mountChatbot() {
     store.chatConfig.set({
       greeting: $('#cb_greeting').value.trim(),
       fallback: $('#cb_fallback').value.trim(),
+      systemPromptExtra: $('#cb_systemExtra')?.value || '',
       intents,
     });
     toast('챗봇 설정이 저장되었습니다', 'success');
   });
+
+  // ============================================================
+  // Live API status check
+  // ============================================================
+  async function checkApi() {
+    const el = $('#cb_status');
+    if (!el) return;
+    el.innerHTML = '<div style="color:var(--steel)">API 상태 확인 중…</div>';
+    try {
+      const r = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          messages: [{ role: 'user', text: '안녕하세요' }],
+          context: {
+            cases: store.cases.all(),
+            faqs: store.faqs.all(),
+            pricing: store.pricing.get(),
+            settings: store.settings.get(),
+          },
+        }),
+      });
+      if (r.ok) {
+        const data = await r.json();
+        el.innerHTML = `
+          <div style="display:flex;align-items:center;gap:10px;font-weight:600;color:var(--success)">
+            <span style="width:10px;height:10px;border-radius:50%;background:var(--success);box-shadow:0 0 0 3px rgba(49,162,76,.2)"></span>
+            정상 연결됨
+          </div>
+          <div style="margin-top:8px;font-size:12px;color:var(--steel)">
+            <b>모델:</b> ${escapeHtml(data.model || '—')}<br>
+            <b>토큰 사용:</b> 입력 ${data.tokens?.in ?? '?'} / 출력 ${data.tokens?.out ?? '?'} / 합계 ${data.tokens?.total ?? '?'}<br>
+            <b>샘플 응답:</b> ${escapeHtml((data.answer || '').slice(0, 120))}…
+          </div>
+        `;
+      } else if (r.status === 503) {
+        const data = await r.json().catch(() => ({}));
+        el.innerHTML = `
+          <div style="display:flex;align-items:center;gap:10px;font-weight:600;color:var(--warning)">
+            <span style="width:10px;height:10px;border-radius:50%;background:var(--warning)"></span>
+            GEMINI_API_KEY 미설정
+          </div>
+          <div style="margin-top:8px;font-size:12px;color:var(--steel)">
+            ${escapeHtml(data.hint || 'Netlify Site settings → Environment variables 에 키를 추가하고 재배포하세요.')}
+          </div>
+        `;
+      } else {
+        const txt = await r.text();
+        el.innerHTML = `
+          <div style="display:flex;align-items:center;gap:10px;font-weight:600;color:var(--critical)">
+            <span style="width:10px;height:10px;border-radius:50%;background:var(--critical)"></span>
+            오류 ${r.status}
+          </div>
+          <div style="margin-top:8px;font-size:11px;color:var(--steel);font-family:var(--font-mono);word-break:break-all">
+            ${escapeHtml(txt.slice(0, 300))}
+          </div>
+        `;
+      }
+    } catch (e) {
+      el.innerHTML = `
+        <div style="display:flex;align-items:center;gap:10px;font-weight:600;color:var(--critical)">
+          <span style="width:10px;height:10px;border-radius:50%;background:var(--critical)"></span>
+          네트워크 오류
+        </div>
+        <div style="margin-top:8px;font-size:12px;color:var(--steel)">
+          ${escapeHtml(String(e?.message || e))}
+        </div>
+      `;
+    }
+  }
+  $('#cb_testApi')?.addEventListener('click', checkApi);
+  checkApi();
 }
 
 /* ============================================================

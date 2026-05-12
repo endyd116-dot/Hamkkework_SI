@@ -71,9 +71,10 @@ export async function ensureSeed() {
     if (!read(KEYS.pricing)) write(KEYS.pricing, seed.pricing_rates || {});
     if (!read(KEYS.chatConfig)) {
       write(KEYS.chatConfig, {
-        greeting: '안녕하세요! 함께워크_SI AI 상담입니다. 무엇이 궁금하신가요?',
+        greeting: '안녕하세요! 함께워크_SI AI 상담입니다. 가격·레퍼런스·AI 도입 등 무엇이든 물어보세요.',
         intents: seed.chat_intents || [],
-        fallback: '아직 학습되지 않은 질문이네요. 30분 무료 상담을 통해 직접 답변드릴게요. 페이지 하단의 [상담 요청]을 이용해 주세요.',
+        fallback: 'Gemini 응답을 받지 못했네요. 30분 무료 상담을 통해 직접 답변드릴게요. 페이지 하단의 [상담 요청]을 이용해 주세요.',
+        systemPromptExtra: '',
       });
     }
     if (!read(KEYS.settings)) {
