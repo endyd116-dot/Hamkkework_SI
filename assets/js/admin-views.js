@@ -551,12 +551,12 @@ async function generateQuotePdf(id) {
 
       <!-- Header -->
       <div style="display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid #0866FF;padding-bottom:24px;margin-bottom:36px">
-        <div>
-          <div style="display:flex;align-items:center;gap:10px">
-            <div style="width:14px;height:14px;border-radius:50%;background:#0866FF;box-shadow:0 0 0 4px rgba(8,102,255,.16)"></div>
+        <div style="display:flex;align-items:center;gap:14px">
+          <img src="/assets/images/logo.png" alt="" style="height:64px;width:auto;object-fit:contain" crossorigin="anonymous" onerror="this.style.display='none'">
+          <div>
             <div style="font-size:22px;font-weight:800;color:#0A1317;letter-spacing:-0.02em">${escapeHtml(s.brand || '함께워크_SI')}</div>
+            <div style="margin-top:6px;font-size:11px;font-weight:700;color:#0866FF;letter-spacing:0.1em;text-transform:uppercase">SI · AI Agent · Platform</div>
           </div>
-          <div style="margin-top:6px;font-size:11px;font-weight:700;color:#0866FF;letter-spacing:0.1em;text-transform:uppercase">SI · AI Platform</div>
         </div>
         <div style="text-align:right">
           <div style="font-size:36px;font-weight:700;color:#0A1317;letter-spacing:0.16em;line-height:1">견 적 서</div>

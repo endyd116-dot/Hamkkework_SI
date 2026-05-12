@@ -9,6 +9,10 @@
 <meta property="og:title" content="함께워크_SI — 대기업 SI 1/2 가격, AI까지">
 <meta property="og:description" content="외주 없는 자체 풀스택, 38억+ 대기업 SI 레퍼런스. 견적 즉시 확인.">
 <meta property="og:type" content="website">
+<meta property="og:image" content="/assets/images/logo.png">
+
+<link rel="icon" type="image/png" href="/assets/images/logo.png">
+<link rel="apple-touch-icon" href="/assets/images/logo.png">
 
 <link rel="preconnect" href="https://cdn.jsdelivr.net">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/[email protected]/dist/web/static/pretendard.css">
@@ -49,8 +53,8 @@
 <nav class="nav">
   <div class="container nav-inner">
     <a href="#hero" class="brand">
-      <span class="brand-dot"></span>
-      <span>함께워크_SI</span>
+      <img src="/assets/images/logo.png" alt="함께워크_SI" class="brand-logo" onerror="this.style.display='none';this.nextElementSibling.classList.add('show-fallback')">
+      <span class="brand-fallback"><span class="brand-dot"></span><span>함께워크_SI</span></span>
     </a>
     <div class="nav-links">
       <a href="#why">왜 우리</a>
@@ -656,7 +660,7 @@
 <div class="chatbot-panel" id="chatbotPanel" role="dialog" aria-label="AI 상담">
   <div class="chatbot-header">
     <div class="who">
-      <div class="avatar">함</div>
+      <div class="avatar"><img src="/assets/images/logo.png" alt="" onerror="this.style.display='none';this.parentElement.textContent='함'"></div>
       <div>
         <div class="name">함께워크 AI 상담</div>
         <div class="status">평균 1초 응답 · RAG 기반</div>
@@ -687,7 +691,10 @@
 <!-- Footer -->
 <footer class="footer">
   <div class="container footer-inner">
-    <div class="footer-brand">함께워크_SI</div>
+    <div class="footer-brand">
+      <img src="/assets/images/logo.png" alt="함께워크_SI" class="footer-logo" onerror="this.style.display='none';this.nextElementSibling.style.display='inline'">
+      <span style="display:none">함께워크_SI</span>
+    </div>
     <div class="footer-links">
       <a href="/blog">인사이트</a>
       <a href="/portal">클라이언트 포털</a>

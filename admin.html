@@ -6,6 +6,9 @@
 <title>함께워크_SI 관리자</title>
 <meta name="robots" content="noindex,nofollow">
 
+<link rel="icon" type="image/png" href="/assets/images/logo.png">
+<link rel="apple-touch-icon" href="/assets/images/logo.png">
+
 <link rel="preconnect" href="https://cdn.jsdelivr.net">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/[email protected]/dist/web/static/pretendard.css">
 
@@ -23,10 +26,14 @@
 <!-- Login screen (shown when not authenticated) -->
 <div id="loginShell" class="login-shell" style="display:none">
   <div class="login-card">
-    <div class="brand">
-      <span class="brand-dot"></span>
-      <span>함께워크_SI <span class="sidebar-brand-sub">Admin</span></span>
+    <div class="login-logo-wrap">
+      <img src="/assets/images/logo.png" alt="함께워크_SI" class="login-logo" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+      <div class="brand" style="display:none">
+        <span class="brand-dot"></span>
+        <span>함께워크_SI <span class="sidebar-brand-sub">Admin</span></span>
+      </div>
     </div>
+    <div class="login-sub">Admin Console</div>
     <h1>관리자 로그인</h1>
     <p>리드·견적·케이스·블로그·KPI까지 모든 운영을 한 곳에서.</p>
 
@@ -55,7 +62,8 @@
   <!-- Sidebar -->
   <aside class="sidebar" id="sidebar">
     <div class="sidebar-header">
-      <span class="brand-dot" style="width:10px;height:10px;border-radius:50%;background:var(--cobalt);box-shadow:0 0 0 3px rgba(8,102,255,.16);flex-shrink:0"></span>
+      <img src="/assets/images/logo.png" alt="함께워크_SI" class="sidebar-logo" onerror="this.style.display='none';this.nextElementSibling.style.display='inline-block'">
+      <span class="brand-dot" style="width:10px;height:10px;border-radius:50%;background:var(--cobalt);box-shadow:0 0 0 3px rgba(8,102,255,.16);flex-shrink:0;display:none"></span>
       <div>
         <div class="sidebar-brand">함께워크_SI</div>
         <span class="sidebar-brand-sub">Operator Console</span>

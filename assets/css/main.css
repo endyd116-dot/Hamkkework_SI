@@ -109,6 +109,24 @@ section {
   display: flex;
   align-items: center;
   gap: 10px;
+  text-decoration: none;
+}
+.brand-logo {
+  height: 40px;
+  width: auto;
+  display: block;
+  object-fit: contain;
+}
+@media (max-width: 720px) {
+  .brand-logo { height: 32px; }
+}
+.brand-fallback {
+  display: none;
+  align-items: center;
+  gap: 10px;
+}
+.brand-fallback.show-fallback {
+  display: inline-flex;
 }
 .brand-dot {
   width: 10px;
@@ -116,6 +134,23 @@ section {
   border-radius: 50%;
   background: var(--cobalt);
   box-shadow: 0 0 0 4px rgba(8, 102, 255, 0.16);
+}
+
+/* Footer logo */
+.footer-logo {
+  height: 36px;
+  width: auto;
+  display: block;
+}
+
+/* Chatbot avatar with logo */
+.chatbot-header .who .avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #fff;
+  border-radius: 50%;
+  padding: 2px;
 }
 
 .nav-links {
