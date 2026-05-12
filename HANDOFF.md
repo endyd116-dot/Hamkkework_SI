@@ -63,8 +63,11 @@ HamkkeWorkSi/
 │
 └── netlify/functions/
     ├── send-lead.js        # 리드 폼 → 이메일/Slack (스텁)
-    ├── chat.js             # Gemini API 프록시 + 스마트 라우팅 + LRU 캐시 ⭐
+    ├── chat.js             # Gemini API 프록시 + 스마트 라우팅 + LRU 캐시 + SSE 스트리밍 ⭐ (v2)
     └── webhook.js          # 범용 웹훅
+
+.github/workflows/
+└── keepalive.yml           # 5분마다 /api/chat GET → Cold Start 회피 (Top 10)
 ```
 
 ## 🔑 환경변수 (Netlify Site settings → Environment variables)
@@ -130,7 +133,7 @@ netlify deploy --prod --dir .
 10. store.usageLog에 누적 → 어드민 비용 카드에 자동 표시
 ```
 
-## ✅ 적용된 비용 최적화 7개
+## ✅ 적용된 비용 최적화 + UX 개선 12개
 
 | # | 항목 | 효과 |
 |---|---|---|
@@ -143,20 +146,32 @@ netlify deploy --prod --dir .
 | 7 | **Top 7** 인메모리 LRU 응답 캐시 (5분 TTL) | -15-30% (반복 질문 시) |
 | 8 | 출력 토큰 캡 강화 (Lite 250 / Flash 500 / Admin 600) | -40% 출력 |
 | 9 | **Top 11** 일일 비용 추세 + 어뷰즈 감지 | 사고 조기 발견 |
+| 10 | **Top 9** SSE 응답 스트리밍 (Functions v2) | 체감 속도 5× ↑ |
+| 11 | **Top 10** Cold Start 회피 (GitHub Actions 5분 cron + GET 헬스체크) | 첫 응답 3~7초 → ~1초 |
+| 12 | **Top 12** A/B 테스트 + AI 분석 대시보드 (변형 A/B/히트맵/상위 질문) | 데이터 기반 최적화 |
 
 **현재 예상 비용**: 월 1만 건 트래픽 시 **~$2~3 / 월** ($50 한도의 4~6%)
 
-## 🔮 미적용 5개 (필요 시 적용 가능)
+## 🔮 미적용 2개 (트리거 시점)
 
 | # | 항목 | 트리거 시점 |
 |---|---|---|
-| Top 1 | Gemini Context Caching | corpus가 32K 토큰 넘을 때 (RAG 구축 후) |
+| Top 1 | Gemini Context Caching | corpus가 32K 토큰 넘을 때 (Top 8 RAG 구축 후) |
 | Top 8 | 진짜 벡터 RAG (Option A 권장) | 케이스 50건+ 또는 사업소개서 PDF 통합 |
-| Top 9 | 응답 스트리밍 (Functions v2) | 사용자가 응답 속도 호소 |
-| Top 10 | Cold start 회피 (Keepalive ping) | 챗봇 첫 호출 느림 피드백 |
-| Top 12 | A/B 테스트 + 분석 대시보드 | 한 달 사용량 데이터 축적 후 |
 
 각각의 구현 방법은 다음 세션에서 "Top X 적용해줘" 한 마디로 진행 가능.
+
+## 🧪 A/B 테스트 (현재 운영 중)
+
+- **변형 A (50%)**: 친근 톤 (기본 시스템 프롬프트)
+- **변형 B (50%)**: 격식 톤 (`[A/B 실험: 변형 B] 정중하고 격식 있는 존댓말…` 지침 추가)
+- **할당 위치**: [chatbot.js](assets/js/chatbot.js) `pickVariant()` — 비운영자 세션 무작위, 운영자는 항상 A
+- **측정 위치**: 어드민 → 사이드바 **AI 분석 (A/B)**
+  - 변형별: 세션 수 / 평균 메시지 / 리드 전환율 / 세션당 비용
+  - 챗봇 퍼널 (오픈 → 메시지 → 리드)
+  - 시간대 히트맵 (24h × 7day)
+  - 상위 첫 질문 TOP 10 + 키워드 TOP 20
+- **결정**: 50+ 세션 후 우세한 쪽으로 통일하려면 `pickVariant()` 수정
 
 ## ⚙️ 자주 쓰는 명령어
 
@@ -185,7 +200,7 @@ npx serve .
 
 ## ⚠️ 알려진 이슈 및 주의사항
 
-1. **로고 파일 크기**: `assets/images/logo.jpg`가 1.5MB. 리사이즈 권장 (512x512로 줄이면 ~100KB).
+1. **로고 파일 크기**: ~~1.5MB~~ → **22KB로 리사이즈 완료** (512×512 JPEG q85). 원본은 `logo.original.jpg`로 백업.
 2. **데모 인증**: 어드민 비밀번호가 코드에 하드코딩됨 (`assets/js/admin.js`). 실서비스 전 Netlify Identity로 교체.
 3. **데이터 저장**: localStorage 기반 — 브라우저별 분리. 백업은 어드민 → 설정 → 백업 (JSON).
 4. **GitHub 자동배포**: 현재 미설정. `git push` 후 `netlify deploy` 수동 실행 필요.
@@ -225,6 +240,20 @@ npx serve .
 ---
 
 **마지막 업데이트**: 2026-05-13
-**총 커밋**: 12개
-**현재 코드 라인 수**: ~10,500줄 (HTML+CSS+JS)
+**총 커밋**: 12개 (+ 미커밋 변경: 로고 + Top 9/10/12)
+**현재 코드 라인 수**: ~11,000줄 (HTML+CSS+JS)
 **현재 시스템 프롬프트 토큰**: 비운영자 ~1,650 / 운영자 ~2,100
+
+## 🆕 이번 세션 (2026-05-13) 변경 사항
+
+- ✅ 로고 1.5MB → 22KB (98.5%↓)
+- ✅ **Top 9** SSE 스트리밍 — `chat.js` Netlify Functions v2 + `streamGenerateContent` SSE / `chatbot.js`에 `paintStreamingBubble` + `stripActionsLive`
+- ✅ **Top 10** Cold Start 회피 — `chat.js`에 GET 분기 + `.github/workflows/keepalive.yml` (5분 cron)
+- ✅ **Top 12** A/B + 분석 대시보드 — `chatbot.js` `pickVariant()` / `chat.js` variantInstruction / `admin-views.js` `renderAnalytics`+`mountAnalytics` / `admin.html` 사이드바 링크 + `admin.js` 라우팅
+
+## 📌 PM (박두용) 작업 필요 — 다음 배포 전
+
+1. **GitHub Actions 권한 활성화** — repo Settings → Actions → General → Allow all (keepalive 워크플로 동작용)
+2. **(선택) keepalive URL 커스터마이즈** — repo Settings → Secrets and variables → Actions → Variables → New variable: `KEEPALIVE_URL` (기본값 `https://hamkkework-si.netlify.app/api/chat` 그대로 OK)
+3. **GitHub 자동배포 연결** — Netlify Site configuration → Build & deploy → Continuous deployment → Link repository → main 브랜치 (이후 `git push`만으로 자동 배포)
+4. **Netlify Identity 인증 교체** (선택, 보안 강화) — Netlify Identity 토글 ON → 본인 이메일 초대 → 어드민 코드 수정은 다음 세션에서 진행 가능

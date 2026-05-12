@@ -68,6 +68,7 @@ const VIEW_FNS = {
   chatbot: { render: Views.renderChatbot, mount: Views.mountChatbot },
   automation: { render: Views.renderAutomation, mount: Views.mountAutomation },
   kpi: { render: Views.renderKpi, mount: Views.mountKpi },
+  analytics: { render: Views.renderAnalytics, mount: Views.mountAnalytics },
   portal: { render: Views.renderPortal, mount: Views.mountPortal },
   settings: { render: Views.renderSettings, mount: Views.mountSettings },
 };

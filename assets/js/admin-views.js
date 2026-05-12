@@ -23,6 +23,7 @@ export const VIEWS = {
   chatbot: { title: 'AI 챗봇 설정', sub: '인텐트 · 응답 · 메시지 로그' },
   automation: { title: '자동화 룰', sub: '이메일·카톡 트리거' },
   kpi: { title: 'KPI 분석', sub: '리드 전환 · 매출 추세 · 채널 분석' },
+  analytics: { title: 'AI 분석', sub: 'A/B 변형 비교 · 시간대 히트맵 · 상위 질문' },
   portal: { title: '클라이언트 포털', sub: '고객 계정 · 권한' },
   settings: { title: '설정', sub: '가격표 · 브랜드 · 팀멤버' },
 };
@@ -1961,6 +1962,223 @@ export function mountKpi() {
   });
   $('#exportLeadsCsv')?.addEventListener('click', () => downloadCsv(leads.map(l=>({id:l.id,name:l.name,company:l.company,email:l.email,phone:l.phone,type:l.type,budget:l.budget,status:l.status,createdAt:l.createdAt})), 'leads.csv'));
   $('#exportInvCsv')?.addEventListener('click', () => downloadCsv(invoices.map(i=>({id:i.id,client:i.clientName,phase:i.phase,amount:i.amount,status:i.status,createdAt:i.createdAt,paidAt:i.paidAt})), 'invoices.csv'));
+}
+
+/* ============================================================
+   11.5  AI Analytics — A/B + 히트맵 + 상위 질문 (Top 12)
+   ============================================================ */
+export function renderAnalytics() {
+  const chatLogs = store.chatLogs.all();
+  const usageLog = store.usageLog.all();
+  const leads = store.leads.all();
+
+  // ─── A/B 변형 비교 ──────────────────────────────────────
+  const variantStats = (v) => {
+    const sessions = chatLogs.filter((l) => l.variant === v);
+    const sessionIds = new Set(sessions.map((s) => s.sessionId));
+    const usage = usageLog.filter((u) => u.variant === v || sessionIds.has(u.sessionId));
+    const variantLeads = leads.filter((l) => l.variant === v && l.source === 'chatbot-ai');
+    const totalMsgs = sessions.reduce((s, l) => s + (l.messages?.length || 0), 0);
+    const cost = usage.reduce((s, u) => s + (u.cost_usd || 0), 0);
+    return {
+      sessions: sessions.length,
+      avgMsgs: sessions.length ? (totalMsgs / sessions.length).toFixed(1) : '0',
+      leads: variantLeads.length,
+      conversion: sessions.length ? ((variantLeads.length / sessions.length) * 100).toFixed(1) : '0',
+      cost: cost.toFixed(4),
+      avgCostPerSession: sessions.length ? (cost / sessions.length).toFixed(5) : '0',
+    };
+  };
+  const aStats = variantStats('A');
+  const bStats = variantStats('B');
+  const totalSessions = aStats.sessions + bStats.sessions;
+  const hasData = totalSessions >= 4;
+  // 통계적 유의성 — 단순 휴리스틱 (세션 50건+ & 전환율 차이 30%+)
+  const sigA = parseFloat(aStats.conversion);
+  const sigB = parseFloat(bStats.conversion);
+  const lift = sigA > 0 ? ((sigB - sigA) / sigA) * 100 : 0;
+  const reliable = totalSessions >= 50;
+  const winner = !hasData ? null : sigB > sigA * 1.1 ? 'B' : sigA > sigB * 1.1 ? 'A' : null;
+
+  // ─── 시간대 히트맵 (24h x 7day) ─────────────────────
+  const heatmap = Array.from({ length: 7 }, () => new Array(24).fill(0));
+  chatLogs.forEach((l) => {
+    (l.messages || []).filter((m) => m.role === 'user').forEach((m) => {
+      const d = new Date(m.at);
+      if (isNaN(d)) return;
+      heatmap[d.getDay()][d.getHours()]++;
+    });
+  });
+  const maxHeat = Math.max(1, ...heatmap.flat());
+
+  // ─── 상위 질문 TOP 10 ───────────────────────────────
+  const questionFreq = {};
+  chatLogs.forEach((l) => {
+    const firstUser = (l.messages || []).find((m) => m.role === 'user');
+    if (!firstUser?.text) return;
+    const key = firstUser.text.trim().slice(0, 60).toLowerCase();
+    questionFreq[key] = (questionFreq[key] || 0) + 1;
+  });
+  const topQuestions = Object.entries(questionFreq).sort((a, b) => b[1] - a[1]).slice(0, 10);
+
+  // ─── 키워드 빈도 (단순 토큰화) ─────────────────────
+  const stopwords = new Set(['있나요', '있어요', '어떻게', '무엇', '어떤', '뭐', '왜', '얼마', '있습니까', '있을까요', '하나요', '인가요', '입니다', '습니다', '있는', '같은', '되나요', '될까요']);
+  const wordFreq = {};
+  chatLogs.forEach((l) => {
+    (l.messages || []).filter((m) => m.role === 'user').forEach((m) => {
+      (m.text || '').toLowerCase().split(/[\s,.!?·~（）()\[\]]+/).forEach((w) => {
+        const t = w.trim();
+        if (t.length < 2 || stopwords.has(t) || /^\d+$/.test(t)) return;
+        wordFreq[t] = (wordFreq[t] || 0) + 1;
+      });
+    });
+  });
+  const topWords = Object.entries(wordFreq).sort((a, b) => b[1] - a[1]).slice(0, 20);
+  const maxWord = topWords[0]?.[1] || 1;
+
+  // ─── 챗봇 퍼널 ──────────────────────────────────────
+  const opens = chatLogs.length;
+  const withUserMsg = chatLogs.filter((l) => (l.messages || []).some((m) => m.role === 'user')).length;
+  const withToolCall = leads.filter((l) => l.source === 'chatbot-ai').length;
+  const aiLeads = withToolCall;
+  const stages = [
+    { label: '챗봇 오픈', n: opens, color: 'var(--cobalt)' },
+    { label: '첫 메시지', n: withUserMsg, color: 'var(--cobalt-deep)' },
+    { label: '리드 등록', n: aiLeads, color: 'var(--success)' },
+  ];
+  const maxStage = Math.max(1, ...stages.map((s) => s.n));
+
+  const dayNames = ['일', '월', '화', '수', '목', '금', '토'];
+  const heatColor = (v) => {
+    if (v === 0) return 'var(--surface-softer)';
+    const intensity = v / maxHeat;
+    if (intensity < 0.25) return 'rgba(8, 102, 255, 0.15)';
+    if (intensity < 0.5) return 'rgba(8, 102, 255, 0.35)';
+    if (intensity < 0.75) return 'rgba(8, 102, 255, 0.6)';
+    return 'rgba(8, 102, 255, 0.9)';
+  };
+
+  return `
+    <div class="adm-card">
+      <h3>🧪 A/B 변형 비교
+        <span style="font-size:12px;font-weight:400;color:var(--steel)">
+          ${hasData ? `${totalSessions}개 세션` : `데이터 수집 중 (${totalSessions}/4)`}
+          ${reliable ? ` · 신뢰 가능 (50+ 세션)` : ` · 신뢰 부족`}
+        </span>
+      </h3>
+      <div class="desc">
+        고객 챗봇 응답 톤을 A(친근)와 B(격식) 두 변형으로 무작위 배포해서 어느 쪽이 더 잘 전환되는지 측정합니다.
+        ${winner ? `현재 우세: <b style="color:var(--success)">변형 ${winner}</b> (Lift ${lift > 0 ? '+' : ''}${lift.toFixed(1)}%)` : ''}
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:14px">
+        ${[['A', '친근 톤', aStats, 'var(--cobalt)'], ['B', '격식 톤', bStats, 'var(--ink-deep)']].map(([v, label, s, color]) => `
+          <div style="padding:18px 20px;background:var(--surface-softer);border-radius:var(--r-md);border-left:4px solid ${color}${winner === v ? ';outline:2px solid var(--success);outline-offset:-2px' : ''}">
+            <div style="font-size:14px;font-weight:700;color:${color};margin-bottom:4px">변형 ${v} ${winner === v ? '🏆' : ''}</div>
+            <div style="font-size:11px;color:var(--steel);margin-bottom:14px">${label}</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;font-size:12px">
+              <div><div style="color:var(--steel)">세션</div><div style="font-size:18px;font-weight:700;color:var(--ink-deep)">${s.sessions}</div></div>
+              <div><div style="color:var(--steel)">평균 메시지</div><div style="font-size:18px;font-weight:700;color:var(--ink-deep)">${s.avgMsgs}</div></div>
+              <div><div style="color:var(--steel)">리드 전환</div><div style="font-size:18px;font-weight:700;color:${color}">${s.conversion}%</div><div style="font-size:10px;color:var(--steel)">${s.leads}건</div></div>
+              <div><div style="color:var(--steel)">세션당 비용</div><div style="font-size:18px;font-weight:700;color:var(--ink-deep)">$${s.avgCostPerSession}</div></div>
+            </div>
+          </div>
+        `).join('')}
+      </div>
+      ${!reliable && hasData ? `<div style="margin-top:12px;padding:10px 14px;background:var(--cobalt-softer);border-radius:var(--r-md);font-size:12px;color:var(--cobalt-deep)">⏳ 50개 세션 이상 수집 시 결과가 통계적으로 의미 있어집니다. 현재 ${totalSessions}건.</div>` : ''}
+    </div>
+
+    <div class="adm-card">
+      <h3>📊 챗봇 전환 퍼널
+        <span style="font-size:12px;font-weight:400;color:var(--steel)">전체 ${opens}개 세션 기준</span>
+      </h3>
+      <div class="desc">챗봇 오픈 → 메시지 입력 → 리드 등록까지 각 단계 전환율.</div>
+      <div class="funnel" style="margin-top:14px">
+        ${stages.map((s, i) => {
+          const pct = stages[0].n > 0 ? (s.n / stages[0].n) * 100 : 0;
+          return `
+            <div class="funnel-step">
+              <div class="funnel-bar" style="height:${Math.max(40, (s.n / maxStage) * 200)}px;background:${s.color}">${s.n}</div>
+              <div class="label">${s.label}<br><small style="color:var(--steel);font-weight:400">${pct.toFixed(0)}%</small></div>
+            </div>
+          `;
+        }).join('')}
+      </div>
+    </div>
+
+    <div class="adm-card">
+      <h3>🕐 시간대별 트래픽 히트맵
+        <span style="font-size:12px;font-weight:400;color:var(--steel)">사용자 메시지 발생 빈도</span>
+      </h3>
+      <div class="desc">언제 응대 준비가 필요한지 한눈에. 진한 셀이 트래픽이 많은 시간대입니다.</div>
+      <div style="overflow-x:auto;margin-top:10px">
+        <table style="border-collapse:separate;border-spacing:2px;font-size:10px">
+          <thead>
+            <tr><th style="width:30px"></th>${Array.from({length:24},(_,h)=>`<th style="width:24px;color:var(--steel);font-weight:500;font-size:9px">${h}</th>`).join('')}</tr>
+          </thead>
+          <tbody>
+            ${heatmap.map((row, day) => `
+              <tr>
+                <td style="color:var(--steel);font-weight:600;text-align:right;padding-right:4px">${dayNames[day]}</td>
+                ${row.map((v, h) => `<td style="width:24px;height:24px;background:${heatColor(v)};border-radius:3px;text-align:center;color:${v>maxHeat*0.5?'#fff':'var(--ink)'};font-weight:600" title="${dayNames[day]}요일 ${h}시 - ${v}건">${v||''}</td>`).join('')}
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;margin-top:10px;font-size:11px;color:var(--steel)">
+        <span>적음</span>
+        <div style="width:18px;height:14px;background:rgba(8,102,255,0.15);border-radius:2px"></div>
+        <div style="width:18px;height:14px;background:rgba(8,102,255,0.35);border-radius:2px"></div>
+        <div style="width:18px;height:14px;background:rgba(8,102,255,0.6);border-radius:2px"></div>
+        <div style="width:18px;height:14px;background:rgba(8,102,255,0.9);border-radius:2px"></div>
+        <span>많음 (최대 ${maxHeat}건)</span>
+      </div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+      <div class="adm-card">
+        <h3>❓ 상위 첫 질문 TOP 10</h3>
+        <div class="desc">사용자가 챗봇 열고 처음 던지는 질문 — FAQ 후보로 좋습니다.</div>
+        ${topQuestions.length === 0 ? emptyState('💬', '아직 데이터가 없습니다.') :
+          `<ol style="margin:10px 0 0;padding-left:24px;font-size:13px;line-height:1.8">
+            ${topQuestions.map(([q, n]) => `<li><span style="color:var(--ink)">${escapeHtml(q)}</span> <span style="color:var(--cobalt-deep);font-weight:700">${n}회</span></li>`).join('')}
+          </ol>`
+        }
+      </div>
+      <div class="adm-card">
+        <h3>🔤 키워드 빈도 TOP 20</h3>
+        <div class="desc">사용자 메시지에 자주 등장하는 단어 — 콘텐츠 우선순위 참고.</div>
+        ${topWords.length === 0 ? emptyState('🔤', '아직 데이터가 없습니다.') :
+          `<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:10px">
+            ${topWords.map(([w, n]) => {
+              const size = 11 + Math.round((n / maxWord) * 9);
+              const opacity = 0.5 + (n / maxWord) * 0.5;
+              return `<span style="display:inline-block;padding:4px 10px;background:rgba(8,102,255,${opacity * 0.15});color:var(--cobalt-deep);border-radius:999px;font-size:${size}px;font-weight:600">${escapeHtml(w)} <small style="color:var(--steel)">${n}</small></span>`;
+            }).join('')}
+          </div>`
+        }
+      </div>
+    </div>
+
+    <div class="adm-card" style="background:var(--surface-softer)">
+      <h3>📌 이 페이지 활용법</h3>
+      <ul style="margin:8px 0 0;padding-left:20px;font-size:13px;line-height:1.8;color:var(--ink)">
+        <li><b>A/B 비교</b> — 변형 A(친근) vs B(격식) 중 어느 쪽이 더 많이 리드로 전환되는지 추적. 50+ 세션 이상이면 신뢰 가능. 우세한 쪽으로 통일하려면 <code>chatbot.js</code>의 <code>pickVariant()</code> 함수를 수정하거나, 기본 톤을 시스템 프롬프트에 박으세요.</li>
+        <li><b>퍼널</b> — 오픈 대비 메시지 입력률이 낮으면 첫 인사 매력도가 부족, 메시지 입력 대비 리드 등록률이 낮으면 도구 호출 트리거가 약함.</li>
+        <li><b>히트맵</b> — 트래픽이 몰리는 시간대에 박두용 PM이 즉시 응대 가능하도록 알림 채널을 강화하거나, 한산한 시간대를 활용해 follow-up을 보낼 수 있습니다.</li>
+        <li><b>상위 질문</b> — 자주 묻는 첫 질문은 FAQ로 등록하면 챗봇 호출 비용을 절감할 수 있습니다. <a href="#faqs" data-nav="faqs">FAQ 편집 →</a></li>
+      </ul>
+    </div>
+  `;
+}
+export function mountAnalytics() {
+  // 하위 네비게이션 처리 (FAQ 링크 등)
+  $$('[data-nav]').forEach((a) => {
+    a.addEventListener('click', (e) => {
+      e.preventDefault();
+      window.navTo?.(a.dataset.nav);
+    });
+  });
 }
 
 /* ============================================================

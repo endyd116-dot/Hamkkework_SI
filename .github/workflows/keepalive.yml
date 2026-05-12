@@ -1,0 +1,35 @@
+name: Keepalive Ping (Cold Start 회피)
+
+# 🔥 Top 10 — 5분마다 /api/chat GET 호출로 Netlify Function을 warm 유지
+# 효과: 챗봇 첫 응답 latency 3~7초 → ~1초
+# 비용: Gemini API 호출 X (GET 분기는 즉시 200 OK 반환), GitHub Actions 무료 한도 내
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'  # UTC 기준 5분마다
+  workflow_dispatch:        # 수동 트리거 허용
+
+concurrency:
+  group: keepalive
+  cancel-in-progress: true
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Warm /api/chat
+        run: |
+          set -e
+          URL="${KEEPALIVE_URL:-https://hamkkework-si.netlify.app/api/chat}"
+          echo "Pinging $URL"
+          HTTP_CODE=$(curl -s -o /tmp/body.json -w "%{http_code}" -X GET "$URL" --max-time 30)
+          echo "HTTP $HTTP_CODE"
+          cat /tmp/body.json || true
+          # 200~399만 성공 처리 (warm 됐다는 신호만 확인)
+          if [ "$HTTP_CODE" -ge 400 ]; then
+            echo "::error::Keepalive ping failed with HTTP $HTTP_CODE"
+            exit 1
+          fi
+        env:
+          KEEPALIVE_URL: ${{ vars.KEEPALIVE_URL }}

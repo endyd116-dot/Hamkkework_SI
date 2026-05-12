@@ -28,6 +28,16 @@ let sending = false;
 let leadCreatedInSession = false;  // session-level rate limit
 let lastLeadAt = 0;
 
+// 🧪 A/B 테스트 — 세션별 variant 할당 (Top 12)
+// A: 친근 톤 (기본) / B: 격식 톤
+// 운영자 모드는 항상 A (실험 대상 아님)
+function pickVariant() {
+  const auth = store.auth.get();
+  if (auth && auth.email) return 'A';
+  return Math.random() < 0.5 ? 'A' : 'B';
+}
+const variant = pickVariant();
+
 // 🛡 무한루프 방지 5중 안전장치
 const LIMITS = {
   toolsPerSession: 10,         // 한 세션에서 도구 호출 최대 횟수
@@ -141,6 +151,27 @@ function streamInto(el, fullText, speed = 14) {
   });
 }
 
+/**
+ * 🚀 SSE 스트리밍 토큰을 실시간으로 버블에 그린다.
+ * - 누적 텍스트에서 ```action ... ``` 블록은 사용자에게 숨김
+ * - 아직 닫히지 않은 ```action 도 숨김 (블록 시작 즉시 사라짐)
+ */
+function stripActionsLive(text) {
+  let s = text.replace(/```action\s*\n?[\s\S]*?```/g, '');
+  const idx = s.indexOf('```action');
+  if (idx >= 0) s = s.slice(0, idx);
+  return s.replace(/\n{3,}/g, '\n\n').trimEnd();
+}
+
+function paintStreamingBubble(el, accumulated, lastRenderedRef) {
+  const visible = stripActionsLive(accumulated);
+  if (visible === lastRenderedRef.value) return;
+  lastRenderedRef.value = visible;
+  el.classList.remove('typing');
+  el.innerHTML = fmtAnswer(visible);
+  body.scrollTop = body.scrollHeight;
+}
+
 /* ============================================================
    🤖 Agent: action block parser + tool executors
    ============================================================ */
@@ -230,10 +261,12 @@ async function executeAction(action) {
         phone: data.phone?.trim() || '',
         type: data.type?.trim() || '아직 정해지지 않음',
         budget: data.budget?.trim() || '정해지지 않음 / 견적 받고 결정',
-        message: (data.message?.trim() || '') + `\n\n[챗봇 AI 자동 등록 · 세션 ${sessionId}]`,
+        message: (data.message?.trim() || '') + `\n\n[챗봇 AI 자동 등록 · 세션 ${sessionId} · variant ${variant}]`,
         status: 'new',
         source: 'chatbot-ai',
         aiSubmitted: true,
+        sessionId,
+        variant,
       });
 
       leadCreatedInSession = true;
@@ -752,9 +785,9 @@ function renderActionCard(card) {
 }
 
 /* ============================================================
-   Gemini call via Netlify Function
+   Gemini call via Netlify Function — SSE streaming (Top 9)
    ============================================================ */
-async function askGemini() {
+async function askGemini({ onToken } = {}) {
   const auth = store.auth.get();  // 어드민 로그인 상태면 운영자 모드
   const isAdmin = !!(auth && auth.email);
 
@@ -805,17 +838,63 @@ async function askGemini() {
 
   const r = await fetch('/api/chat', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ messages, context, systemPromptExtra, sessionId, auth }),
+    headers: { 'Content-Type': 'application/json', 'Accept': 'text/event-stream' },
+    body: JSON.stringify({ messages, context, systemPromptExtra, sessionId, auth, variant }),
   });
-  if (!r.ok) {
+  if (!r.ok || !r.body) {
     const body = await r.text().catch(() => '');
     const e = new Error(`Chat API ${r.status}`);
     e.status = r.status;
     e.body = body;
     throw e;
   }
-  return await r.json();
+
+  // 🚀 SSE 파서
+  const reader = r.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let accumulated = '';
+  let done = null;
+  let errEvent = null;
+
+  while (true) {
+    const { done: readerDone, value } = await reader.read();
+    if (readerDone) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    // 이벤트 단위(\n\n) 파싱
+    let sep;
+    while ((sep = buffer.indexOf('\n\n')) !== -1) {
+      const event = buffer.slice(0, sep);
+      buffer = buffer.slice(sep + 2);
+      const line = event.trim();
+      if (!line.startsWith('data:')) continue;
+      const dataStr = line.slice(5).trim();
+      if (!dataStr) continue;
+      try {
+        const obj = JSON.parse(dataStr);
+        if (obj.type === 'token') {
+          accumulated += obj.text || '';
+          onToken?.(obj.text || '', accumulated);
+        } else if (obj.type === 'done') {
+          done = obj;
+          if (obj.answer) accumulated = obj.answer;
+        } else if (obj.type === 'error') {
+          errEvent = obj;
+        }
+      } catch (e) {
+        console.warn('[chatbot] SSE parse failed', e?.message);
+      }
+    }
+  }
+
+  if (errEvent) {
+    const e = new Error(errEvent.error || 'stream error');
+    e.detail = errEvent.detail;
+    throw e;
+  }
+  // done이 누락된 경우(미정상 종료)에도 누적 텍스트는 반환
+  return done || { answer: accumulated };
 }
 
 /* ============================================================
@@ -895,9 +974,15 @@ async function send(question) {
   let usedFallback = false;
 
   let geminiRes = null;
+  const lastRendered = { value: '' };
   try {
     apiCallTimes.push(Date.now());
-    geminiRes = await askGemini();
+    geminiRes = await askGemini({
+      onToken: (_chunk, accumulated) => {
+        // 🚀 실시간 토큰 페인팅 (action 블록은 자동 숨김)
+        paintStreamingBubble(typingEl, accumulated, lastRendered);
+      },
+    });
     rawAnswer = (geminiRes?.answer || '').trim();
     if (!rawAnswer) throw new Error('빈 응답');
 
@@ -911,6 +996,7 @@ async function send(question) {
         tokens_out: geminiRes.tokens?.out || 0,
         cost_usd: geminiRes.cost_usd || 0,
         sessionId,
+        variant,
       });
       // 한도 임박 경고
       checkBudgetWarning();
@@ -924,10 +1010,16 @@ async function send(question) {
   // 🤖 Parse and execute agent actions
   const { actions, cleanText } = extractActions(rawAnswer);
 
-  // First render the text bubble (cleaned)
+  // 최종 본문 렌더 — 스트림 완료 후 정리된 텍스트로 덮어씀
+  // (fallback 시에는 simulated typing, 정상 스트림 시에는 이미 그려져 있음)
   typingEl.classList.remove('typing');
-  typingEl.innerHTML = '';
-  await streamInto(typingEl, cleanText || rawAnswer);
+  if (usedFallback) {
+    typingEl.innerHTML = '';
+    await streamInto(typingEl, cleanText || rawAnswer);
+  } else {
+    typingEl.innerHTML = fmtAnswer(cleanText || rawAnswer);
+    body.scrollTop = body.scrollHeight;
+  }
 
   // Then execute each tool and render result card
   for (const action of actions) {
@@ -962,6 +1054,7 @@ function persistLog() {
   const entry = {
     sessionId,
     messages: conversation,
+    variant,
     updatedAt: utils.nowIso(),
   };
   if (idx >= 0) store.chatLogs.update(all[idx].id, entry);

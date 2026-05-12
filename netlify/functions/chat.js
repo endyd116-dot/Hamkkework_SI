@@ -1,5 +1,5 @@
 /**
- * POST /api/chat — Cost-optimized Gemini with smart model routing.
+ * POST /api/chat — Cost-optimized Gemini with smart model routing + SSE streaming.
  *
  * ROUTING STRATEGY (saves cost):
  *   - Admin mode               → FLASH (reasoning over chatLogs)
@@ -8,30 +8,27 @@
  *   - Everything else          → LITE  (cheap & fast)
  *
  * TOKEN CAPS (per response):
- *   - Lite (simple)            → 400 tokens
- *   - Flash (complex)          → 800 tokens
- *   - Admin mode               → 1024 tokens
+ *   - Lite (simple)            → 250 tokens
+ *   - Flash (complex)          → 500 tokens
+ *   - Admin mode               → 600 tokens
+ *
+ * STREAMING (Top 9):
+ *   - Always returns SSE (text/event-stream)
+ *   - Events: { type: "token", text } | { type: "done", answer, model, tokens, cost_usd, routing, finishReason } | { type: "error", error }
+ *   - Cached responses still emit a single "done" event for client uniformity
  *
  * COST MONITORING:
- *   - Response includes { model, tokens, cost_usd_estimate }
+ *   - Final "done" event includes { model, tokens, cost_usd }
  *   - Client accumulates to store.usageLog
  *   - Admin dashboard shows monthly progress vs $50 budget
  *
- * Environment variables:
- *   GEMINI_API_KEY              required
- *   GEMINI_MODEL_FLASH          default: gemini-2.5-flash
- *   GEMINI_MODEL_LITE           default: gemini-3.1-flash-lite
- *   GEMINI_PRICE_FLASH_IN       default: 0.30 (USD per 1M input tokens)
- *   GEMINI_PRICE_FLASH_OUT      default: 2.50
- *   GEMINI_PRICE_LITE_IN        default: 0.10
- *   GEMINI_PRICE_LITE_OUT       default: 0.40
- *   GEMINI_MONTHLY_BUDGET_USD   default: 50 (informational only)
+ * Environment variables: GEMINI_API_KEY / GEMINI_MODEL_FLASH / GEMINI_MODEL_LITE /
+ *   GEMINI_PRICE_{FLASH|LITE}_{IN|OUT} / GEMINI_MONTHLY_BUDGET_USD
  */
 
 const MODEL_FLASH = process.env.GEMINI_MODEL_FLASH || 'gemini-2.5-flash';
 const MODEL_LITE  = process.env.GEMINI_MODEL_LITE  || 'gemini-3.1-flash-lite';
 
-// USD per 1,000,000 tokens — override via env if pricing changes
 const PRICING = {
   [MODEL_FLASH]: {
     in:  Number(process.env.GEMINI_PRICE_FLASH_IN  || 0.30),
@@ -51,17 +48,15 @@ const COMPLEX_KEYWORDS = [
   'create', 'analyze', 'summarize',
 ];
 
-/** Route to Flash if reasoning is needed, else Lite */
 function selectModel({ isAdmin, lastText, conversationLength }) {
-  if (isAdmin) return MODEL_FLASH;                      // 운영자: 추론 필수
-  if (conversationLength > 6) return MODEL_FLASH;       // 긴 대화: 컨텍스트 이해
+  if (isAdmin) return MODEL_FLASH;
+  if (conversationLength > 6) return MODEL_FLASH;
   const text = (lastText || '').toLowerCase();
   if (COMPLEX_KEYWORDS.some((k) => text.includes(k.toLowerCase()))) return MODEL_FLASH;
-  return MODEL_LITE;                                    // 단순 응대: 저렴
+  return MODEL_LITE;
 }
 
 function maxTokensFor({ isAdmin, model }) {
-  // 💰 보수적 토큰 캡 — 짧고 명확한 답변 강제 → 출력 비용 -30%
   if (isAdmin) return 600;
   return model === MODEL_FLASH ? 500 : 250;
 }
@@ -76,18 +71,14 @@ function estimateCostUsd(model, usage) {
 
 /* ============================================================
    💰 인메모리 LRU 응답 캐시 (Top 7)
-   - 같은 질문이 5분 내 들어오면 비용 0
-   - Netlify Function hot 상태에서만 유효 (cold start 시 손실)
-   - 운영자 모드 / 도구 호출 응답은 캐시 안 함
    ============================================================ */
 const responseCache = new Map();
 const CACHE_MAX_SIZE = 100;
-const CACHE_TTL_MS = 5 * 60 * 1000;  // 5분
+const CACHE_TTL_MS = 5 * 60 * 1000;
 
-function makeCacheKey(question, isAdmin) {
-  // 정규화: 소문자, 공백 압축, 최대 200자
+function makeCacheKey(question, isAdmin, variant = 'A') {
   const q = (question || '').toLowerCase().replace(/\s+/g, ' ').trim().slice(0, 200);
-  return `${isAdmin ? 'a' : 'u'}:${q}`;
+  return `${isAdmin ? 'a' : 'u'}:${variant}:${q}`;
 }
 
 function cacheGet(key) {
@@ -97,7 +88,6 @@ function cacheGet(key) {
     responseCache.delete(key);
     return null;
   }
-  // LRU: 최근 접근을 뒤로 이동
   responseCache.delete(key);
   responseCache.set(key, e);
   return e.data;
@@ -105,73 +95,96 @@ function cacheGet(key) {
 
 function cacheSet(key, data) {
   if (responseCache.size >= CACHE_MAX_SIZE) {
-    // 가장 오래된 것 삭제
     const oldest = responseCache.keys().next().value;
     if (oldest) responseCache.delete(oldest);
   }
   responseCache.set(key, { at: Date.now(), data });
 }
 
-export const handler = async (event) => {
-  if (event.httpMethod !== 'POST') {
-    return resp(405, { error: 'Method not allowed' });
+/* ============================================================
+   🚀 Netlify Functions v2 entry point — streaming SSE
+   ============================================================ */
+export default async (req) => {
+  // 🔥 Cold Start 회피용 health check (Top 10)
+  // GitHub Actions cron이 5분마다 GET 호출 → Function warm 유지 (Gemini 호출 X, 비용 0)
+  if (req.method === 'GET') {
+    return json(200, {
+      ok: true,
+      service: 'chat',
+      warm: true,
+      now: new Date().toISOString(),
+      gemini_configured: !!process.env.GEMINI_API_KEY,
+    });
+  }
+  if (req.method !== 'POST') {
+    return json(405, { error: 'Method not allowed' });
   }
   if (!process.env.GEMINI_API_KEY) {
-    return resp(503, {
+    return json(503, {
       error: 'GEMINI_API_KEY 환경변수가 설정되지 않았습니다',
       hint: 'Netlify Site settings → Environment variables 에서 GEMINI_API_KEY를 추가하거나, 로컬에서 `netlify env:set GEMINI_API_KEY <key>` 실행',
     });
   }
 
   let payload;
-  try { payload = JSON.parse(event.body || '{}'); }
-  catch { return resp(400, { error: 'Invalid JSON' }); }
+  try { payload = await req.json(); }
+  catch { return json(400, { error: 'Invalid JSON' }); }
 
-  const { messages = [], context = {}, systemPromptExtra = '', auth = null } = payload;
-  const isAdmin = !!(auth && auth.email);  // 운영자 모드 플래그
+  const { messages = [], context = {}, systemPromptExtra = '', auth = null, variant = 'A' } = payload;
+  const isAdmin = !!(auth && auth.email);
+
+  // 🧪 A/B 테스트 — variant에 따라 톤 지침 주입 (Top 12)
+  // A: 친근 (기본 동작) / B: 격식
+  const variantInstruction = variant === 'B'
+    ? '\n[A/B 실험: 변형 B — 격식 톤] 정중하고 격식 있는 존댓말을 사용하세요. 이모지는 최소화하고, 비즈니스 메일 톤을 유지하세요.'
+    : '';
+  const finalSystemPromptExtra = (systemPromptExtra || '') + variantInstruction;
+
   if (!Array.isArray(messages) || messages.length === 0) {
-    return resp(400, { error: 'messages array required' });
+    return json(400, { error: 'messages array required' });
   }
   const last = messages[messages.length - 1];
   if (!last || last.role !== 'user' || !last.text?.trim()) {
-    return resp(400, { error: 'Last message must be a non-empty user message' });
+    return json(400, { error: 'Last message must be a non-empty user message' });
   }
 
-  // 💰 응답 캐시 조회 (운영자 모드 / 멀티 턴 대화는 캐시 안 함)
+  // 💰 캐시 조회 (운영자 모드 / 멀티 턴은 캐시 안 함)
   const cacheable = !isAdmin && messages.length === 1;
-  const cacheKey = cacheable ? makeCacheKey(last.text, isAdmin) : null;
+  const cacheKey = cacheable ? makeCacheKey(last.text, isAdmin, variant) : null;
   if (cacheKey) {
     const cached = cacheGet(cacheKey);
     if (cached) {
-      return resp(200, { ...cached, fromCache: true, cost_usd: 0 });
+      return sseSingleDone({ ...cached, fromCache: true, cost_usd: 0 });
     }
   }
 
-  const system = buildSystemPrompt(context, systemPromptExtra, { isAdmin, auth });
+  const system = buildSystemPrompt(context, finalSystemPromptExtra, { isAdmin, auth });
 
-  // Convert internal {role, text} → Gemini {role, parts}
   const contents = messages
     .filter((m) => m.text?.trim())
     .map((m) => ({
       role: m.role === 'user' ? 'user' : 'model',
       parts: [{ text: m.text }],
     }));
-
-  // Collapse consecutive same-role turns (Gemini requires alternating)
   const collapsed = collapseTurns(contents);
 
-  // 🎯 Smart model routing — Flash for complex, Lite for simple
   const model = selectModel({
     isAdmin,
     lastText: last.text,
     conversationLength: messages.length,
   });
   const maxOutputTokens = maxTokensFor({ isAdmin, model });
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
+  const routing = {
+    tier: model === MODEL_FLASH ? 'flash' : 'lite',
+    maxOutputTokens,
+    reason: isAdmin ? 'admin' : (messages.length > 6 ? 'long_conv' : (model === MODEL_FLASH ? 'complex_keyword' : 'simple')),
+  };
 
-  let r;
+  // 🚀 streamGenerateContent (SSE)
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:streamGenerateContent?alt=sse`;
+  let upstream;
   try {
-    r = await fetch(url, {
+    upstream = await fetch(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -184,7 +197,7 @@ export const handler = async (event) => {
           temperature: 0.4,
           topK: 40,
           topP: 0.95,
-          maxOutputTokens,            // 동적 토큰 캡 (Lite=400 / Flash=800 / Admin=1024)
+          maxOutputTokens,
           responseMimeType: 'text/plain',
         },
         safetySettings: [
@@ -197,54 +210,105 @@ export const handler = async (event) => {
     });
   } catch (e) {
     console.error('[chat] fetch failed', e);
-    return resp(502, { error: 'Gemini API 호출 실패', detail: String(e?.message || e) });
+    return sseSingleError('Gemini API 호출 실패', String(e?.message || e));
   }
 
-  if (!r.ok) {
-    const errText = await r.text();
-    console.error('[chat] gemini error', r.status, errText);
-    return resp(r.status, { error: 'Gemini API error', status: r.status, detail: errText });
+  if (!upstream.ok || !upstream.body) {
+    const errText = await upstream.text().catch(() => '');
+    console.error('[chat] gemini error', upstream.status, errText);
+    return sseSingleError(`Gemini API error (${upstream.status})`, errText.slice(0, 500));
   }
 
-  let data;
-  try { data = await r.json(); }
-  catch { return resp(502, { error: 'Gemini 응답 파싱 실패' }); }
-
-  const cand = data?.candidates?.[0];
-  const answer =
-    cand?.content?.parts?.map((p) => p.text).filter(Boolean).join('\n') ||
-    '죄송합니다. 응답을 생성하지 못했습니다. 다시 시도해 주세요.';
-
-  const usage = data?.usageMetadata || {};
-  const costUsd = estimateCostUsd(model, usage);
-  const cleanAnswer = answer.trim();
-
-  // 💰 캐시 저장 — 도구 호출 응답은 캐시 X (매번 실행해야 함)
-  const responseBody = {
-    answer: cleanAnswer,
-    model,
-    routing: {
-      tier: model === MODEL_FLASH ? 'flash' : 'lite',
-      maxOutputTokens,
-      reason: isAdmin ? 'admin' : (messages.length > 6 ? 'long_conv' : (model === MODEL_FLASH ? 'complex_keyword' : 'simple')),
+  return new Response(buildStreamTransform(upstream.body, { model, routing, cacheKey }), {
+    status: 200,
+    headers: {
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-store, no-cache',
+      'Connection': 'keep-alive',
+      'X-Accel-Buffering': 'no',
     },
-    finishReason: cand?.finishReason,
-    tokens: {
-      in: usage.promptTokenCount || null,
-      out: usage.candidatesTokenCount || null,
-      total: usage.totalTokenCount || null,
-    },
-    cost_usd: costUsd,
-    monthly_budget_usd: Number(process.env.GEMINI_MONTHLY_BUDGET_USD || 50),
-  };
-
-  // 💰 도구 호출 응답은 캐시 X (매번 실행해야 함)
-  if (cacheKey && !cleanAnswer.includes('```action')) {
-    cacheSet(cacheKey, responseBody);
-  }
-
-  return resp(200, responseBody);
+  });
 };
+
+/* ============================================================
+   🔄 Gemini SSE → 클라이언트 SSE 변환
+   - Gemini가 보내는 streamGenerateContent SSE 청크를 파싱
+   - 각 token을 { type:"token", text } 이벤트로 즉시 forward
+   - finishReason / usageMetadata 누적 → 마지막에 { type:"done", ... }
+   ============================================================ */
+function buildStreamTransform(upstreamBody, { model, routing, cacheKey }) {
+  const encoder = new TextEncoder();
+  const decoder = new TextDecoder();
+  let accumulated = '';
+  let lastUsage = null;
+  let lastFinishReason = null;
+  let buffer = '';
+
+  return new ReadableStream({
+    async start(controller) {
+      const reader = upstreamBody.getReader();
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+
+          // SSE 라인 단위 파싱 (data: {...}\n\n)
+          let idx;
+          while ((idx = buffer.indexOf('\n')) !== -1) {
+            const rawLine = buffer.slice(0, idx);
+            buffer = buffer.slice(idx + 1);
+            const line = rawLine.trim();
+            if (!line.startsWith('data:')) continue;
+            const dataStr = line.slice(5).trim();
+            if (!dataStr) continue;
+            try {
+              const obj = JSON.parse(dataStr);
+              const cand = obj?.candidates?.[0];
+              const text = cand?.content?.parts?.map((p) => p.text).filter(Boolean).join('') || '';
+              if (text) {
+                accumulated += text;
+                controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: 'token', text })}\n\n`));
+              }
+              if (cand?.finishReason) lastFinishReason = cand.finishReason;
+              if (obj?.usageMetadata) lastUsage = obj.usageMetadata;
+            } catch (e) {
+              console.warn('[chat] SSE parse error', e?.message, dataStr.slice(0, 200));
+            }
+          }
+        }
+
+        const costUsd = estimateCostUsd(model, lastUsage || {});
+        const cleanAnswer = accumulated.trim() || '죄송합니다. 응답을 생성하지 못했습니다. 다시 시도해 주세요.';
+        const doneBody = {
+          answer: cleanAnswer,
+          model,
+          routing,
+          finishReason: lastFinishReason,
+          tokens: {
+            in:    lastUsage?.promptTokenCount     || null,
+            out:   lastUsage?.candidatesTokenCount || null,
+            total: lastUsage?.totalTokenCount      || null,
+          },
+          cost_usd: costUsd,
+          monthly_budget_usd: Number(process.env.GEMINI_MONTHLY_BUDGET_USD || 50),
+        };
+
+        // 💰 캐시 저장 — 도구 호출 응답은 캐시 X (매번 실행해야 함)
+        if (cacheKey && !cleanAnswer.includes('```action')) {
+          cacheSet(cacheKey, doneBody);
+        }
+
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: 'done', ...doneBody })}\n\n`));
+        controller.close();
+      } catch (e) {
+        console.error('[chat] stream transform failed', e);
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: 'error', error: String(e?.message || e) })}\n\n`));
+        controller.close();
+      }
+    },
+  });
+}
 
 /* ============================================================
    System prompt — builds comprehensive RAG context
@@ -256,7 +320,6 @@ function buildSystemPrompt(context, extra, mode = {}) {
     chatLogs = [], leads = [], scheduledTasks = [],
   } = context;
 
-  // 💰 압축: 회사 정보 + 약속을 한 줄씩 (-50% 토큰)
   const company = `
 ## 함께워크_SI 핵심
 - 브랜드 ${settings.brand || '함께워크_SI'} | ${settings.email || 'endy116@naver.com'} | ${settings.phone || '010-2807-5242'} | 채널: 크몽·위시켓·메일
@@ -266,7 +329,6 @@ function buildSystemPrompt(context, extra, mode = {}) {
 - 약속: 라인별 견적 / 6개월 무상 하자보증 / 소스 100% 양도 / 100% 완주 / 결제 30·40·30
 `;
 
-  // 💰 압축: 가격표 표 형식으로
   const pricingTable = `
 ## 가격표 (단위: 만원, +${Math.round((pricing.overhead_ratio ?? 0.25) * 100)}% 오버헤드, ±${Math.round((pricing.range_ratio ?? 0.15) * 100)}% 범위)
 - 페이지: 단순 ${pricing.pages_simple ?? 30} / 복잡 ${pricing.pages_complex ?? 80} (개당)
@@ -276,31 +338,26 @@ function buildSystemPrompt(context, extra, mode = {}) {
 - 운영비(토큰·벡터DB·GPU·인프라·도메인·SSL)는 월 별도 정산 또는 클라이언트 직접 지불
 `;
 
-  // 💰 압축: 레퍼런스 한 줄씩, 핵심 필드만
   const caseList = cases.length > 0 ? `
 ## 레퍼런스 (${cases.length}건)
 ${cases.slice(0, 10).map((c) => `- ${c.label}|${c.client}|${c.title}|${c.amount || ''}|${(c.tags || []).join(',')}`).join('\n')}
 ` : '';
 
-  // 💰 압축: FAQ 한 줄씩
   const faqList = faqs.length > 0 ? `
 ## FAQ
 ${faqs.slice(0, 10).map((f) => `Q: ${f.q} / A: ${f.a}`).join('\n')}
 ` : '';
 
-  // 💰 압축: 블로그는 제목만 (자세한 건 호출 시 사용자에게 링크 안내)
   const blogList = posts.length > 0 ? `
 ## 블로그 (${posts.length}건)
 ${posts.filter((p) => p.published !== false).slice(0, 6).map((p) => `- ${p.title}`).join('\n')}
 ` : '';
 
-  // 💰 압축: 프로세스 핵심만
   const processStr = `
 ## 5단계 프로세스 (총 일정 일반 SI의 1/2)
 1. 상담·견적(24h) → 2. 계약·기획(1-2주) → 3. 개발·단계검수 → 4. 검수·인도(2주, 잔금 정산) → 5. 사후관리(6개월 보증)
 `;
 
-  // 💰 압축: 응답 가이드 핵심만 (-55% 토큰)
   const guide = `
 ## 응답 가이드 (필수)
 - 한국어 존댓말, **최대 3문장 / 150자**, 1문장 권장. 운영자 모드는 더 짧게.
@@ -312,7 +369,6 @@ ${posts.filter((p) => p.published !== false).slice(0, 6).map((p) => `- ${p.title
 - 링크: [Pricing](/#pricing), [레퍼런스](/#cases), [상담](/#contact)
 `;
 
-  // 💰 압축: 도구 9개 정의를 표 형식으로 (-65% 토큰)
   const tools = `
 ## 🛠 AI 에이전트 도구 (총 9개)
 
@@ -377,8 +433,6 @@ ${posts.filter((p) => p.published !== false).slice(0, 6).map((p) => `- ${p.title
 
   const extraSection = extra ? `\n## 추가 지침 (관리자 설정)\n${extra}\n` : '';
 
-  // 💰 압축: 운영자 모드 섹션 (-50%)
-  // 운영자 컨텍스트(chatLogs/leads/tasks)는 클라이언트가 의도 매칭 시에만 전송
   const adminSection = !isAdmin ? '' : `
 ---
 # 🔑 운영자 모드 (${auth?.name || '박두용 PM'})
@@ -431,18 +485,56 @@ function collapseTurns(contents) {
       out.push({ role: c.role, parts: [...c.parts] });
     }
   }
-  // Gemini requires first message to be 'user'
   while (out.length && out[0].role !== 'user') out.shift();
   return out;
 }
 
-function resp(statusCode, body) {
-  return {
-    statusCode,
+/* ============================================================
+   Response helpers
+   ============================================================ */
+function json(status, body) {
+  return new Response(JSON.stringify(body), {
+    status,
     headers: {
       'Content-Type': 'application/json; charset=utf-8',
       'Cache-Control': 'no-store',
     },
-    body: JSON.stringify(body),
-  };
+  });
+}
+
+function sseSingleDone(payload) {
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream({
+    start(controller) {
+      controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: 'done', ...payload })}\n\n`));
+      controller.close();
+    },
+  });
+  return new Response(stream, {
+    status: 200,
+    headers: {
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-store, no-cache',
+      'Connection': 'keep-alive',
+      'X-Accel-Buffering': 'no',
+    },
+  });
+}
+
+function sseSingleError(error, detail) {
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream({
+    start(controller) {
+      controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: 'error', error, detail })}\n\n`));
+      controller.close();
+    },
+  });
+  return new Response(stream, {
+    status: 200,
+    headers: {
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-store, no-cache',
+      'Connection': 'keep-alive',
+    },
+  });
 }
