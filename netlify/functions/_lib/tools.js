@@ -39,6 +39,7 @@ const READ_ONLY_TOOLS = new Set([
   'cases_find', 'cases_list',
   'faqs_find',
   'quotes_list',
+  // update_bot_instruction은 mutation이라 캐시 안 함, get은 매번 최신값 받게 캐시 제외
 ]);
 
 function makeToolCacheKey(name, args) {
@@ -86,6 +87,22 @@ async function readCollection(key) {
 async function writeCollection(key, data) {
   const store = getBlobsStore();
   await store.setJSON(key, data);
+}
+
+async function readChatConfig() {
+  try {
+    const store = getBlobsStore();
+    const data = await store.get('chatConfig', { type: 'json' });
+    return (data && typeof data === 'object') ? data : {};
+  } catch (e) {
+    console.error('[chatConfig:read]', e);
+    return {};
+  }
+}
+
+async function writeChatConfig(cfg) {
+  const store = getBlobsStore();
+  await store.setJSON('chatConfig', cfg);
 }
 
 function truncate(s, n = MAX_TEXT) {
@@ -567,6 +584,67 @@ export const TOOL_CATALOG = {
           createdAt: q.createdAt,
         }));
       return { total, returned: items.length, items };
+    },
+  },
+
+  // ─────────────────────────────────────────────────────────
+  // 챗봇 행동 지침 (chatConfig.systemPromptExtra) — 2개 도구
+  // 운영자가 자연어로 "다음부터 ㅇㅇ해줘" 하면 영구 저장 →
+  // 다음 사용자 채팅부터 자동 적용
+  // ─────────────────────────────────────────────────────────
+  get_bot_instruction: {
+    adminOnly: true,
+    declaration: {
+      name: 'get_bot_instruction',
+      description: 'Get the current bot behavior instruction (systemPromptExtra). Use when admin asks what the bot is currently set to do.',
+      parameters: { type: 'object', properties: {} },
+    },
+    async handler() {
+      const cfg = await readChatConfig();
+      const extra = cfg.systemPromptExtra || '';
+      return { instruction: extra || '(현재 추가 행동 지침 없음)', length: extra.length };
+    },
+  },
+
+  update_bot_instruction: {
+    adminOnly: true,
+    declaration: {
+      name: 'update_bot_instruction',
+      description: 'Update the bot behavior instruction (systemPromptExtra). Affects ALL future customer conversations. Use when admin says "from now on bot should X" / "다음부터 ㅇㅇ해줘" / "고객한테 ㅇㅇ 받으라고 해" 등.',
+      parameters: {
+        type: 'object',
+        required: ['instruction'],
+        properties: {
+          instruction: { type: 'string', description: '새 지침 텍스트 (한국어 OK). 짧고 명확하게.' },
+          mode: { type: 'string', description: 'append (기본, 기존 규칙에 한 줄 추가) | replace (전체 교체)' },
+        },
+      },
+    },
+    async handler({ instruction, mode }) {
+      if (!instruction || !String(instruction).trim()) {
+        return { error: 'instruction_required' };
+      }
+      const cfg = await readChatConfig();
+      const existing = cfg.systemPromptExtra || '';
+      const m = (mode || 'append').toLowerCase();
+      const trimmed = String(instruction).trim();
+      let next;
+      if (m === 'replace') {
+        next = trimmed;
+      } else {
+        // append: bullet 마커 자동 prepend (이미 있으면 그대로)
+        const formatted = /^[-•*]/.test(trimmed) ? trimmed : `- ${trimmed}`;
+        next = existing ? `${existing}\n${formatted}` : formatted;
+      }
+      await writeChatConfig({ ...cfg, systemPromptExtra: next });
+      return {
+        ok: true,
+        mode: m,
+        previous: existing.slice(0, 80),
+        new_length: next.length,
+        added: m === 'append' ? trimmed.slice(0, 80) : null,
+        note: '다음 사용자 응답부터 자동 적용. 어드민 페이지의 챗봇 설정 textarea에도 반영됩니다(최대 30초 내).',
+      };
     },
   },
 };

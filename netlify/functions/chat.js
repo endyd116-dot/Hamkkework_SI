@@ -740,6 +740,15 @@ ${posts.filter((p) => p.published !== false).slice(0, 6).map((p) => `- ${p.title
 - "특정 세션 내용" → chatlogs_get (sessionId)
 - "케이스/레퍼런스" → cases_find or cases_list
 - "견적서 목록" → quotes_list
+- "지금 챗봇 행동 지침 뭐야/현재 설정/확인" → get_bot_instruction
+- "다음부터 ㅇㅇ해줘/고객한테 ㅇㅇ 받아라/지침 추가/규칙 변경" → update_bot_instruction (mode='append' 기본, "전체 교체" 명시 시 'replace')
+
+## 챗봇 행동 지침 변경 절차 (중요)
+운영자가 "다음부터 사용자한테 이름·연락처 받으라고 해" 같은 영구 행동 변경을 요청하면:
+1. update_bot_instruction 도구 호출 (instruction에 새 규칙을 짧고 명확하게)
+2. 결과의 note를 답변에 포함 — "다음 사용자 응답부터 적용됩니다"
+3. **절대로 도구 호출 없이 "알겠습니다"라고만 답하지 말 것** (실제 저장 안 되면 무의미)
+4. 모호하면 1회만 짧게 확인 ("'append'로 추가할까요, 기존 규칙 전부 'replace'할까요?")
 
 질문이 모호하면 한 번만 되묻기. 절대 leads_find로 카운트하지 말 것 (전체 통계는 leads_stats).
 `;
