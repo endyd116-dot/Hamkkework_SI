@@ -1295,6 +1295,48 @@ async function send(question) {
   // 🤖 Parse and execute agent actions
   const { actions, cleanText } = extractActions(rawAnswer);
 
+  // 🛡 안전망 보강 — 정상 응답이어도 (AI가 도구 호출 안 함 + 사용자 contact 있고 + 콜백 의도) 면 자동 등록
+  // 이전: fallback 시에만 자동 추출 → AI가 답변엔 '전달했다'고 하면서 실제 등록 X 인 불일치 발생
+  if (!autoExtractedFallback && actions.length === 0) {
+    const recentUserText = conversation
+      .filter((m) => m.role === 'user')
+      .slice(-3)
+      .map((m) => m.text)
+      .join(' ') + ' ' + q;
+    const callbackIntent = /연락|전화|통화|콜백|핸드폰|연락처/.test(recentUserText);
+    if (callbackIntent) {
+      const info = extractContactInfo(recentUserText);
+      const contact = info.phone || info.email;
+      if (contact) {
+        const method = info.phone ? 'phone' : 'email';
+        const leadName = info.name || '(이름 미기재)';
+        store.scheduledTasks.add({
+          type: 'callback_request',
+          leadName,
+          contact,
+          method,
+          preferredTime: info.time || '',
+          topic: info.name
+            ? '챗봇 상담 (클라이언트 자동 등록 — AI 도구 미호출 보완)'
+            : '챗봇 상담 (이름 미기재 — 추가 확인 필요)',
+          urgency: 'normal',
+          status: 'pending',
+          scheduledAt: new Date().toISOString(),
+          sessionId,
+          aiSubmitted: true,
+          autoExtracted: true,
+          needsNameFollowup: !info.name,
+        });
+        autoExtractedFallback = {
+          name: info.name || null,
+          contact,
+          method,
+          preferredTime: info.time,
+        };
+      }
+    }
+  }
+
   // 최종 본문 렌더 — 스트림 완료 후 정리된 텍스트로 덮어씀
   // (fallback 시에는 simulated typing, 정상 스트림 시에는 이미 그려져 있음)
   typingEl.classList.remove('typing');
