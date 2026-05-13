@@ -1025,6 +1025,56 @@ async function askGemini({ onToken, onToolCall, onToolResult } = {}) {
 }
 
 /* ============================================================
+   🛡 클라이언트 안전망 — 사용자 메시지에서 직접 정보 추출
+   Gemini가 503/끊김으로 응답 실패해도 PM에게 연락처가 손실되지 않도록
+   ============================================================ */
+function extractContactInfo(text) {
+  if (!text || typeof text !== 'string') return {};
+  const t = ' ' + text.replace(/[ ]/g, ' ') + ' ';
+
+  // 전화번호: 010-XXXX-XXXX / 010 XXXX XXXX / 010XXXXXXXX
+  const phoneRe = /(?:^|[^\d])(01[016789](?:[-\s]?\d{3,4})[-\s]?\d{4})(?:$|[^\d])/;
+  const phoneMatch = t.match(phoneRe);
+  const phone = phoneMatch ? phoneMatch[1].replace(/[-\s]/g, '') : null;
+
+  // 이메일
+  const emailMatch = t.match(/([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})/);
+  const email = emailMatch ? emailMatch[1] : null;
+
+  // 이름 추출 — 우선순위 패턴
+  // 흔한 어절·문장끝 표현 제외 (이름으로 오해하지 않게)
+  const NAME_BLACKLIST = new Set([
+    '이거', '저거', '그거', '이거야', '저거야',
+    '내가', '제가', '저는', '나는', '우리',
+    '네요', '해요', '됩니다', '입니다', '있어요',
+    '안녕', '안녕하세요', '감사합니다', '고객님', '운영자',
+    '미용실', '예약', '시스템', '견적', '상담', '연락', '전화',
+  ]);
+  const isValidName = (n) => n && n.length >= 2 && n.length <= 5 && !NAME_BLACKLIST.has(n);
+
+  let name = null;
+  const namePatterns = [
+    /(?:^|\s)이름은\s*([가-힣]{2,5})/,
+    /(?:^|\s)저는\s*([가-힣]{2,5})\s*(?:이고|이에요|입니다|이야|예요|이라고|라고)/,
+    /(?:^|\s)제\s*이름은\s*([가-힣]{2,5})/,
+    /([가-힣]{2,5})\s*(?:이라고|라고)\s*(?:해요|합니다|불러|불러주세요)/,
+    /([가-힣]{2,5})\s+01[016789](?:[-\s]?\d{3,4})[-\s]?\d{4}/, // 이름 + 전화
+    /01[016789](?:[-\s]?\d{3,4})[-\s]?\d{4}\s+([가-힣]{2,5})/, // 전화 + 이름
+  ];
+  for (const re of namePatterns) {
+    const m = t.match(re);
+    if (m && isValidName(m[1])) { name = m[1]; break; }
+  }
+
+  // 시간 표현 (preferredTime용) — "내일 오후 4시", "4시", "오전 10시 30분" 등
+  const timeRe = /((?:오늘|내일|모레)?\s*(?:오전|오후|아침|점심|저녁|밤)?\s*\d{1,2}\s*시(?:\s*\d{1,2}\s*분)?)/;
+  const timeMatch = text.match(timeRe);
+  const time = timeMatch ? timeMatch[1].replace(/\s+/g, ' ').trim() : null;
+
+  return { name, phone, email, time };
+}
+
+/* ============================================================
    Rule-based fallback (uses admin intents)
    ============================================================ */
 function fallbackReply(question) {
@@ -1128,6 +1178,7 @@ async function send(question) {
   const typingEl = typingIndicator();
   let rawAnswer = '';
   let usedFallback = false;
+  let autoExtractedFallback = null; // 안전망 자동 추출 성공 시 정보 보관
 
   let geminiRes = null;
   const lastRendered = { value: '' };
@@ -1188,6 +1239,46 @@ async function send(question) {
     console.warn('[chatbot] Gemini failed, using fallback', e);
     rawAnswer = fallbackReply(q);
     usedFallback = true;
+
+    // 🛡 안전망: 사용자 마지막 3개 메시지에서 직접 정보 추출
+    // 이름 + 연락처가 모두 있으면 콜백 요청으로 자동 등록 (PM에게 손실 방지)
+    try {
+      const recentUserText = conversation
+        .filter((m) => m.role === 'user')
+        .slice(-3)
+        .map((m) => m.text)
+        .join(' ') + ' ' + q;
+      const info = extractContactInfo(recentUserText);
+
+      if (info.name && (info.phone || info.email)) {
+        const method = info.phone ? 'phone' : 'email';
+        const contact = info.phone || info.email;
+        store.scheduledTasks.add({
+          type: 'callback_request',
+          leadName: info.name,
+          contact,
+          method,
+          preferredTime: info.time || '',
+          topic: '챗봇 상담 (AI 응답 실패 시 자동 추출)',
+          urgency: 'normal',
+          status: 'pending',
+          scheduledAt: new Date().toISOString(),
+          sessionId,
+          aiSubmitted: true,
+          autoExtracted: true, // 어드민이 확인할 수 있게 표시
+        });
+        autoExtractedFallback = {
+          name: info.name,
+          contact,
+          method,
+          preferredTime: info.time,
+        };
+        // 친화 메시지로 교체 (인텐트 fallback 텍스트보다 우선)
+        rawAnswer = `✅ ${info.name}님, 박두용 PM에게 정확히 전달했습니다 (${contact}${info.time ? ` · ${info.time} 연락 요청` : ''}). 곧 직접 연락드릴게요!`;
+      }
+    } catch (extractErr) {
+      console.warn('[chatbot] auto-extract failed', extractErr);
+    }
   }
 
   // 🤖 Parse and execute agent actions
@@ -1219,7 +1310,23 @@ async function send(question) {
     }
   }
 
-  if (usedFallback) {
+  // 🛡 안전망 자동 추출 성공 → 결과 카드 렌더 (AI가 도구 호출한 것처럼)
+  if (autoExtractedFallback) {
+    const methodKr = { phone: '📞 전화', email: '📨 이메일' }[autoExtractedFallback.method] || autoExtractedFallback.method;
+    renderActionCard({
+      icon: '✅',
+      title: 'PM 연락 요청 (자동 등록)',
+      rows: [
+        ['이름', autoExtractedFallback.name],
+        ['방법', methodKr],
+        ['연락처', autoExtractedFallback.contact],
+        autoExtractedFallback.preferredTime && ['선호 시간', autoExtractedFallback.preferredTime],
+      ].filter(Boolean),
+      footer: '✓ 박두용 PM에게 전달했습니다. 가능한 시간대에 연락드리겠습니다.',
+      tone: 'success',
+    });
+  } else if (usedFallback) {
+    // 안전망도 실패한 진짜 fallback — 사용자에게 친화 안내
     const note = document.createElement('div');
     note.style.cssText = 'margin-top:6px;font-size:10px;color:var(--steel);font-style:italic';
     note.textContent = '※ AI 응답이 잠시 지연됐어요. 1분 뒤 다시 질문해주시면 정확하게 안내드릴게요.';
