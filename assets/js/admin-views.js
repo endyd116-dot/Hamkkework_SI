@@ -318,6 +318,53 @@ export function renderDashboard() {
           </table>`
       }
     </div>
+
+    ${(() => {
+      const drafts = (store.emailDrafts.all() || []).sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+      const pending = drafts.filter((d) => d.status === 'draft');
+      const failed = drafts.filter((d) => d.status === 'failed').slice(0, 3);
+      const sent = drafts.filter((d) => d.status === 'sent').slice(0, 3);
+      if (drafts.length === 0) return '';
+      return `
+        <div class="adm-card" style="border-left:4px solid var(--cobalt-deep)">
+          <h3>📧 AI 작성 이메일
+            <span style="font-size:11px;font-weight:400;color:var(--steel)">미발송 ${pending.length} · 실패 ${failed.length} · 발송 ${sent.length}</span>
+          </h3>
+          <div class="desc">
+            AI가 챗봇 대화 중 작성한 이메일입니다. <code>RESEND_API_KEY</code> 환경변수가 있으면 자동 발송되고, 없으면 여기서 검토 후 수동 발송(📨 mailto) 가능합니다.
+          </div>
+          ${pending.length > 0 ? `
+            <table class="adm-table" style="margin-top:8px">
+              <thead><tr><th>수신</th><th>제목</th><th>관련</th><th>작성</th><th></th></tr></thead>
+              <tbody>${pending.slice(0, 8).map((d) => `
+                <tr>
+                  <td><span style="color:var(--cobalt-deep);font-weight:600">${escapeHtml(d.to)}</span></td>
+                  <td style="font-size:13px">${escapeHtml(d.subject)}</td>
+                  <td style="font-size:12px">${escapeHtml(d.leadName || '—')}<div style="font-size:11px;color:var(--steel)">${escapeHtml(d.purpose || 'general')}</div></td>
+                  <td style="font-size:12px;color:var(--steel)">${fmt.rel(d.createdAt)}</td>
+                  <td>
+                    <a class="adm-btn sm" href="mailto:${escapeHtml(d.to)}?subject=${encodeURIComponent(d.subject)}&body=${encodeURIComponent(d.body)}">📨 발송 (메일러)</a>
+                    <button class="adm-btn sm secondary" data-action="mark-email-sent" data-id="${d.id}">발송 완료 표시</button>
+                    <button class="adm-btn sm ghost" data-action="view-email-body" data-id="${d.id}">본문 보기</button>
+                    <button class="adm-btn sm ghost" data-action="delete-email" data-id="${d.id}" style="color:#dc2626">삭제</button>
+                  </td>
+                </tr>
+              `).join('')}</tbody>
+            </table>
+          ` : `<div style="padding:12px;color:var(--steel);font-size:13px">미발송 드래프트가 없습니다.</div>`}
+          ${failed.length > 0 ? `
+            <details style="margin-top:8px"><summary style="cursor:pointer;font-size:12px;color:#dc2626">❌ 발송 실패 ${failed.length}건</summary>
+              ${failed.map((d) => `<div style="font-size:12px;padding:6px;border:1px solid var(--line);border-radius:6px;margin-top:6px"><b>${escapeHtml(d.to)}</b> · ${escapeHtml(d.subject)}<br><code style="font-size:11px;color:#dc2626">${escapeHtml(d.error || '')}</code></div>`).join('')}
+            </details>
+          ` : ''}
+          ${sent.length > 0 ? `
+            <details style="margin-top:8px"><summary style="cursor:pointer;font-size:12px;color:var(--steel)">✅ 최근 발송 ${sent.length}건</summary>
+              ${sent.map((d) => `<div style="font-size:12px;padding:6px;color:var(--steel)">📨 ${escapeHtml(d.to)} · ${escapeHtml(d.subject)} · ${fmt.rel(d.sentAt || d.createdAt)}</div>`).join('')}
+            </details>
+          ` : ''}
+        </div>
+      `;
+    })()}
   `;
 }
 
@@ -378,6 +425,32 @@ export function mountDashboard() {
     e.preventDefault();
     window.navTo(b.dataset.nav);
   }));
+
+  // 📧 이메일 드래프트 액션 핸들러
+  $$('[data-action="mark-email-sent"]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const id = btn.dataset.id;
+      store.emailDrafts.update(id, { status: 'sent', sentAt: utils.nowIso(), sentBy: 'pm-manual' });
+      toast('발송 완료로 표시했습니다', 'success');
+      window.rerenderView?.();
+    });
+  });
+  $$('[data-action="view-email-body"]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const d = store.emailDrafts.byId(btn.dataset.id);
+      if (!d) return;
+      const win = window.open('', '_blank', 'width=600,height=500');
+      win.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(d.subject)}</title><style>body{font-family:system-ui;padding:24px;max-width:600px;margin:0 auto;line-height:1.6}h1{font-size:18px;margin:0 0 6px}.meta{font-size:12px;color:#666;margin-bottom:16px;padding-bottom:12px;border-bottom:1px solid #eee}.body{white-space:pre-wrap;background:#fafafa;padding:16px;border-radius:8px}</style></head><body><h1>${escapeHtml(d.subject)}</h1><div class="meta">To: <b>${escapeHtml(d.to)}</b> · ${escapeHtml(d.purpose||'general')} · ${escapeHtml(d.createdAt)}</div><div class="body">${escapeHtml(d.body)}</div></body></html>`);
+    });
+  });
+  $$('[data-action="delete-email"]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      if (!confirm('이 이메일 드래프트를 삭제하시겠어요?')) return;
+      store.emailDrafts.remove(btn.dataset.id);
+      toast('삭제되었습니다', 'success');
+      window.rerenderView?.();
+    });
+  });
 
   // 🤖 AI scheduled task — send-now / cancel
   $$('[data-action="send-task"]').forEach((btn) => {

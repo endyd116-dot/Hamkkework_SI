@@ -786,6 +786,15 @@ Netlify Blobs DB의 실제 데이터 조회/변경. AI가 functionCall로 호출
 - "지금 챗봇 행동 지침 뭐야/현재 설정/확인" → get_bot_instruction
 - "다음부터 ㅇㅇ해줘/고객한테 ㅇㅇ 받아라/지침 추가/규칙 변경" → update_bot_instruction (mode='append' 기본, "전체 교체" 명시 시 'replace_all')
 - "분석해줘/패턴 찾아줘/자주 묻는 질문/개선할 부분/챗봇 학습" → analyze_chat_patterns (since=7d|30d, min_count=2)
+- "메일 보내줘/이메일 발송/회신 보내줘/안내문 보내줘" → send_email (to/subject/body 필수, leadName/purpose 권장)
+
+## 📧 이메일 발송 (send_email) 사용 가이드
+- 이메일 본문은 운영자가 별도 검수 없이 그대로 발송될 수 있으므로 **공손한 한국어 + 회사 시그니처** 포함:
+  \`안녕하세요 {leadName}님,\\n\\n{본문}\\n\\n감사합니다.\\n박두용 PM | 함께워크_SI\\n010-2807-5242 | endy116@naver.com\`
+- 콜백 확인 메일: purpose='callback_confirm', subject='박두용 PM 회신 안내'
+- 견적 발송: purpose='quote_send', subject 예 '함께워크_SI 견적 안내 - {프로젝트명}'
+- 팔로업: purpose='followup'
+- 환경에 RESEND_API_KEY 있으면 즉시 발송, 없으면 drafts 저장 → 도구 결과의 status/note 확인 후 사용자에게 정확히 안내
 
 ## 챗봇 행동 지침 변경 절차 (중요)
 운영자가 "다음부터 사용자한테 이름·연락처 받으라고 해" 같은 영구 행동 변경을 요청하면:

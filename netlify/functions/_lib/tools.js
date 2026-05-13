@@ -596,6 +596,102 @@ export const TOOL_CATALOG = {
   },
 
   // ─────────────────────────────────────────────────────────
+  // 이메일 발송 — Resend 연동 (없으면 drafts에 저장 → PM 수동 발송)
+  // ─────────────────────────────────────────────────────────
+  send_email: {
+    adminOnly: true,
+    declaration: {
+      name: 'send_email',
+      description: 'Send or draft an email. If RESEND_API_KEY is set, sends immediately; otherwise saves as draft in emailDrafts for PM to send manually. Use for callback confirmations, quote sending, follow-ups, etc.',
+      parameters: {
+        type: 'object',
+        required: ['to', 'subject', 'body'],
+        properties: {
+          to: { type: 'string', description: '수신자 이메일 (또는 콤마 구분 다수)' },
+          subject: { type: 'string', description: '제목 (간결하게)' },
+          body: { type: 'string', description: '본문 (한국어, 평문 또는 간단 마크다운). 인사+본문+서명 포함.' },
+          leadName: { type: 'string', description: '관련 리드/고객 이름 (어드민 식별용, 선택)' },
+          leadId: { type: 'string', description: '관련 lead id (선택)' },
+          purpose: { type: 'string', description: 'callback_confirm | quote_send | followup | general' },
+        },
+      },
+    },
+    async handler({ to, subject, body, leadName, leadId, purpose }) {
+      if (!to || !/.+@.+\..+/.test(String(to).trim())) return { error: 'invalid_to_email', to };
+      if (!subject || !subject.trim()) return { error: 'subject_required' };
+      if (!body || !body.trim()) return { error: 'body_required' };
+
+      const settings = await readChatConfig().catch(() => ({}));
+      const draft = {
+        id: 'mail_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+        to: String(to).trim(),
+        subject: String(subject).trim(),
+        body: String(body).trim(),
+        leadName: leadName || null,
+        leadId: leadId || null,
+        purpose: purpose || 'general',
+        status: 'draft',
+        createdAt: new Date().toISOString(),
+        createdBy: 'ai',
+      };
+
+      const apiKey = process.env.RESEND_API_KEY;
+      const fromAddr = process.env.RESEND_FROM || 'onboarding@resend.dev';
+      if (apiKey) {
+        try {
+          const r = await fetch('https://api.resend.com/emails', {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${apiKey}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              from: fromAddr,
+              to: [draft.to],
+              subject: draft.subject,
+              text: draft.body,
+            }),
+          });
+          if (r.ok) {
+            const json = await r.json().catch(() => ({}));
+            draft.status = 'sent';
+            draft.sentAt = new Date().toISOString();
+            draft.providerId = json.id || null;
+          } else {
+            const errText = await r.text().catch(() => '');
+            draft.status = 'failed';
+            draft.error = `Resend ${r.status}: ${errText.slice(0, 200)}`;
+          }
+        } catch (e) {
+          draft.status = 'failed';
+          draft.error = String(e?.message || e);
+        }
+      } else {
+        draft.note = 'RESEND_API_KEY 미설정 — drafts에 저장됨. 어드민 페이지에서 검토·수동 발송 가능.';
+      }
+
+      // emailDrafts에 push
+      const drafts = await readCollection('emailDrafts');
+      drafts.unshift(draft);
+      await writeCollection('emailDrafts', drafts);
+
+      return {
+        ok: true,
+        id: draft.id,
+        status: draft.status,
+        to: draft.to,
+        subject: draft.subject,
+        autoSent: draft.status === 'sent',
+        note: draft.note || (draft.status === 'sent'
+          ? '발송 완료'
+          : draft.status === 'failed'
+            ? `발송 실패: ${draft.error?.slice(0, 100)}`
+            : '드래프트로 저장됨'),
+      };
+    },
+  },
+
+  // ─────────────────────────────────────────────────────────
   // 챗봇 학습 사이클 — 자주 묻는 패턴 + 약한 응답 분석
   // 운영자가 "분석해줘"/"개선할 부분"/"자주 묻는 질문" 등 요청 시 호출
   // ─────────────────────────────────────────────────────────
