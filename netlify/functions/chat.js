@@ -856,10 +856,12 @@ ${guide}
   // 🛠 운영 데이터(chatLogs/leads/scheduledTasks)는 더 이상 dump하지 않음 — AI가 도구 호출로 직접 조회
   const dynamicParts = [];
 
-  // 📅 오늘 날짜 (캘린더 도구의 상대 날짜 변환용)
-  const todayIso = new Date().toISOString().slice(0, 10);
-  const todayWeekday = ['일','월','화','수','목','금','토'][new Date().getDay()];
-  dynamicParts.push(`[오늘 = ${todayIso} (${todayWeekday}요일) · 시간대 Asia/Seoul]`);
+  // 📅 오늘 날짜 — Asia/Seoul 기준 (KST = UTC+9)
+  // toISOString()은 UTC라서 한국 자정 근처에 날짜가 어긋남
+  const _kstNow = new Date(Date.now() + 9 * 3600 * 1000);
+  const todayIso = _kstNow.toISOString().slice(0, 10); // YYYY-MM-DD KST
+  const todayWeekday = ['일','월','화','수','목','금','토'][_kstNow.getUTCDay()];
+  dynamicParts.push(`[오늘 = ${todayIso} (${todayWeekday}요일) · 시간대 Asia/Seoul (KST = UTC+9)]`);
 
   // 운영자 이름 (auth.name이 콜마다 다를 수 있음)
   if (isAdmin && auth?.name) {
