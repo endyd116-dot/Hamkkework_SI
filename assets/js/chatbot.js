@@ -881,10 +881,12 @@ function pickRelevantCases(query, cases) {
 /* ============================================================
    Gemini call via Netlify Function — SSE streaming (Top 9)
    ============================================================ */
-async function askGemini({ onToken } = {}) {
+async function askGemini({ onToken, onToolCall, onToolResult } = {}) {
   const auth = store.auth.get();  // 어드민 로그인 상태면 운영자 모드
   const isAdmin = !!(auth && auth.email);
 
+  // 💡 운영자 데이터(chatLogs/leads/scheduledTasks)는 더 이상 전송하지 않음 —
+  //   서버가 Function Calling으로 직접 Netlify Blobs에서 조회 (토큰 -60%)
   const context = {
     cases: store.cases.all(),
     faqs: store.faqs.all(),
@@ -894,36 +896,6 @@ async function askGemini({ onToken } = {}) {
       title: p.title, excerpt: p.excerpt, published_at: p.published_at,
     })),
   };
-
-  // 💰 비용 절감 #2 — 운영자 컨텍스트는 의도가 매칭될 때만 동적 포함
-  if (isAdmin) {
-    const lastMsg = conversation[conversation.length - 1]?.text?.toLowerCase() || '';
-    const recentMsgs = conversation.slice(-3).map((m) => m.text?.toLowerCase() || '').join(' ');
-    const intent = lastMsg + ' ' + recentMsgs;
-
-    const wantsChatLogs = /대화|로그|세션|요약|챗봇|conversation|summarize/.test(intent);
-    const wantsLeads = /리드|고객|신청|문의|lead|customer/.test(intent);
-    const wantsTasks = /통화|연락|follow|예약|대기|발송|callback|메일|예정/.test(intent);
-
-    // 의도가 매칭될 때만 컨텍스트 포함 → 입력 토큰 50% 절감
-    if (wantsChatLogs) {
-      context.chatLogs = store.chatLogs.all().slice(-10).map((l) => ({
-        sessionId: l.sessionId,
-        updatedAt: l.updatedAt,
-        messages: (l.messages || []).slice(-6),
-      }));
-    }
-    if (wantsLeads) {
-      context.leads = store.leads.all().slice(-30).map((l) => ({
-        id: l.id, name: l.name, email: l.email, company: l.company,
-        type: l.type, budget: l.budget, status: l.status, source: l.source,
-        createdAt: l.createdAt,
-      }));
-    }
-    if (wantsTasks) {
-      context.scheduledTasks = store.scheduledTasks.all().filter((t) => t.status === 'pending');
-    }
-  }
 
   const cfg = store.chatConfig.get();
   const systemPromptExtra = cfg.systemPromptExtra || '';
@@ -986,6 +958,12 @@ async function askGemini({ onToken } = {}) {
         if (obj.type === 'token') {
           accumulated += obj.text || '';
           onToken?.(obj.text || '', accumulated);
+        } else if (obj.type === 'tool_call') {
+          // 🛠 서버측 도구 호출 시작 — UX 인디케이터 (예: "[리드 검색 중...]")
+          onToolCall?.(obj.name, obj.args);
+        } else if (obj.type === 'tool_result') {
+          // 🛠 도구 실행 결과 요약 (UI는 굳이 표시 안 해도 OK)
+          onToolResult?.(obj.name, obj.summary);
         } else if (obj.type === 'done') {
           done = obj;
           if (obj.answer) accumulated = obj.answer;
@@ -1120,6 +1098,26 @@ async function send(question) {
       onToken: (_chunk, accumulated) => {
         // 🚀 실시간 토큰 페인팅 (action 블록은 자동 숨김)
         paintStreamingBubble(typingEl, accumulated, lastRendered);
+      },
+      onToolCall: (name) => {
+        // 🛠 도구 실행 중 UX 인디케이터
+        const labels = {
+          leads_find: '🔍 리드 검색 중',
+          leads_list: '📋 리드 목록 조회 중',
+          leads_update: '✏️ 리드 정보 수정 중',
+          leads_stats: '📊 리드 통계 계산 중',
+          tasks_list: '📋 작업 큐 조회 중',
+          tasks_update: '✏️ 작업 상태 변경 중',
+          chatlogs_search: '🔍 대화 로그 검색 중',
+          chatlogs_get: '💬 대화 세션 조회 중',
+          cases_find: '📚 레퍼런스 검색 중',
+          cases_list: '📚 케이스 목록 조회 중',
+          faqs_find: '❓ FAQ 검색 중',
+          quotes_list: '📄 견적 목록 조회 중',
+        };
+        const label = labels[name] || `🛠 ${name} 실행 중`;
+        typingEl.innerHTML = `<span style="color:var(--steel);font-style:italic;font-size:12px">${label}…</span>`;
+        body.scrollTop = body.scrollHeight;
       },
     });
     rawAnswer = (geminiRes?.answer || '').trim();

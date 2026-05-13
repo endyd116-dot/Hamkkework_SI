@@ -1,30 +1,26 @@
 /**
- * POST /api/chat — Cost-optimized Gemini with smart model routing + SSE streaming.
+ * POST /api/chat — Cost-optimized Gemini with smart model routing + SSE streaming
+ *                  + Native Function Calling (Agent Loop)
  *
  * ROUTING STRATEGY (saves cost):
- *   - Admin mode               → FLASH (reasoning over chatLogs)
+ *   - Admin mode               → FLASH (reasoning + tools)
  *   - Complex intent keywords  → FLASH (multi-param tool calls)
  *   - Long conversation (>6)   → FLASH (context understanding)
- *   - Everything else          → LITE  (cheap & fast)
+ *   - Everything else          → LITE  (cheap & fast, no tools)
  *
- * TOKEN CAPS (per response):
- *   - Lite (simple)            → 250 tokens
- *   - Flash (complex)          → 500 tokens
- *   - Admin mode               → 600 tokens
+ * TOOLS (server-side execution via _lib/tools.js):
+ *   - When Flash is selected, tools catalog is attached to Gemini request
+ *   - Gemini may emit functionCall → server executes → result fed back → Gemini generates final response
+ *   - Max 5 agent iterations per turn
  *
- * STREAMING (Top 9):
- *   - Always returns SSE (text/event-stream)
- *   - Events: { type: "token", text } | { type: "done", answer, model, tokens, cost_usd, routing, finishReason } | { type: "error", error }
- *   - Cached responses still emit a single "done" event for client uniformity
- *
- * COST MONITORING:
- *   - Final "done" event includes { model, tokens, cost_usd }
- *   - Client accumulates to store.usageLog
- *   - Admin dashboard shows monthly progress vs $50 budget
+ * STREAMING:
+ *   - SSE events: token | tool_call | tool_result | done | error
  *
  * Environment variables: GEMINI_API_KEY / GEMINI_MODEL_FLASH / GEMINI_MODEL_LITE /
  *   GEMINI_PRICE_{FLASH|LITE}_{IN|OUT} / GEMINI_MONTHLY_BUDGET_USD
  */
+
+import { getToolDeclarations, executeServerTool, getToolSummary } from './_lib/tools.js';
 
 const MODEL_FLASH = process.env.GEMINI_MODEL_FLASH || 'gemini-2.5-flash';
 const MODEL_LITE  = process.env.GEMINI_MODEL_LITE  || 'gemini-3.1-flash-lite';
@@ -190,136 +186,235 @@ export default async (req) => {
     reason: isAdmin ? 'admin' : (messages.length > 6 ? 'long_conv' : (model === MODEL_FLASH ? 'complex_keyword' : 'simple')),
   };
 
-  // 🚀 streamGenerateContent (SSE)
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:streamGenerateContent?alt=sse`;
-  let upstream;
-  try {
-    upstream = await fetch(url, {
-      method: 'POST',
+  // 🛠 Function Calling — Flash로 라우팅된 경우만 도구 첨부 (Lite는 FC 미지원 가능성)
+  const tools = (model === MODEL_FLASH)
+    ? [{ functionDeclarations: getToolDeclarations({ isAdmin }) }]
+    : undefined;
+
+  // 🤖 Agent Loop으로 스트림 반환 (functionCall 발생 시 자동 실행 + 재호출)
+  return new Response(
+    runAgentStream({
+      initialContents: collapsed,
+      systemInstruction: { parts: [{ text: staticPrompt }] },
+      tools,
+      model,
+      maxOutputTokens,
+      routing,
+      cacheKey,
+      isAdmin,
+    }),
+    {
+      status: 200,
       headers: {
-        'Content-Type': 'application/json',
-        'x-goog-api-key': process.env.GEMINI_API_KEY,
+        'Content-Type': 'text/event-stream; charset=utf-8',
+        'Cache-Control': 'no-store, no-cache',
+        'Connection': 'keep-alive',
+        'X-Accel-Buffering': 'no',
       },
-      body: JSON.stringify({
-        contents: collapsed,
-        systemInstruction: { parts: [{ text: staticPrompt }] },
-        generationConfig: {
-          temperature: 0.4,
-          topK: 40,
-          topP: 0.95,
-          maxOutputTokens,
-          responseMimeType: 'text/plain',
-        },
-        safetySettings: [
-          { category: 'HARM_CATEGORY_HARASSMENT',        threshold: 'BLOCK_ONLY_HIGH' },
-          { category: 'HARM_CATEGORY_HATE_SPEECH',       threshold: 'BLOCK_ONLY_HIGH' },
-          { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_ONLY_HIGH' },
-          { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_ONLY_HIGH' },
-        ],
-      }),
-    });
-  } catch (e) {
-    console.error('[chat] fetch failed', e);
-    return sseSingleError('Gemini API 호출 실패', String(e?.message || e));
-  }
-
-  if (!upstream.ok || !upstream.body) {
-    const errText = await upstream.text().catch(() => '');
-    console.error('[chat] gemini error', upstream.status, errText);
-    return sseSingleError(`Gemini API error (${upstream.status})`, errText.slice(0, 500));
-  }
-
-  return new Response(buildStreamTransform(upstream.body, { model, routing, cacheKey }), {
-    status: 200,
-    headers: {
-      'Content-Type': 'text/event-stream; charset=utf-8',
-      'Cache-Control': 'no-store, no-cache',
-      'Connection': 'keep-alive',
-      'X-Accel-Buffering': 'no',
-    },
-  });
+    }
+  );
 };
 
 /* ============================================================
-   🔄 Gemini SSE → 클라이언트 SSE 변환
-   - Gemini가 보내는 streamGenerateContent SSE 청크를 파싱
-   - 각 token을 { type:"token", text } 이벤트로 즉시 forward
-   - finishReason / usageMetadata 누적 → 마지막에 { type:"done", ... }
+   🤖 Agent Loop — Gemini Function Calling 사이클
+   - Gemini가 functionCall을 반환하면 서버에서 실행 → 결과 다시 보내고 응답 받음
+   - 최대 5회 반복 (안전장치)
+   - text는 즉시 클라이언트로 스트림, tool_call/tool_result는 별도 SSE 이벤트
    ============================================================ */
-function buildStreamTransform(upstreamBody, { model, routing, cacheKey }) {
-  const encoder = new TextEncoder();
+const AGENT_MAX_ITERATIONS = 5;
+
+function sseEnqueue(controller, type, data) {
+  controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ type, ...data })}\n\n`));
+}
+
+async function callGemini({ model, contents, systemInstruction, tools, maxOutputTokens }) {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:streamGenerateContent?alt=sse`;
+  return fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-goog-api-key': process.env.GEMINI_API_KEY,
+    },
+    body: JSON.stringify({
+      contents,
+      systemInstruction,
+      ...(tools ? { tools, toolConfig: { functionCallingConfig: { mode: 'AUTO' } } } : {}),
+      generationConfig: {
+        temperature: 0.4,
+        topK: 40,
+        topP: 0.95,
+        maxOutputTokens,
+        ...(tools ? {} : { responseMimeType: 'text/plain' }),
+      },
+      safetySettings: [
+        { category: 'HARM_CATEGORY_HARASSMENT',        threshold: 'BLOCK_ONLY_HIGH' },
+        { category: 'HARM_CATEGORY_HATE_SPEECH',       threshold: 'BLOCK_ONLY_HIGH' },
+        { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_ONLY_HIGH' },
+        { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_ONLY_HIGH' },
+      ],
+    }),
+  });
+}
+
+/** Upstream Gemini SSE 스트림을 파싱하면서 text는 즉시 controller로 전달, functionCalls는 모음 */
+async function pipeGeminiStream(upstreamBody, controller) {
+  const reader = upstreamBody.getReader();
   const decoder = new TextDecoder();
-  let accumulated = '';
-  let lastUsage = null;
-  let lastFinishReason = null;
   let buffer = '';
+  const textParts = [];
+  const functionCalls = [];
+  let usage = null;
+  let finishReason = null;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let idx;
+    while ((idx = buffer.indexOf('\n')) !== -1) {
+      const rawLine = buffer.slice(0, idx);
+      buffer = buffer.slice(idx + 1);
+      const line = rawLine.trim();
+      if (!line.startsWith('data:')) continue;
+      const dataStr = line.slice(5).trim();
+      if (!dataStr) continue;
+      try {
+        const obj = JSON.parse(dataStr);
+        const cand = obj?.candidates?.[0];
+        for (const part of cand?.content?.parts || []) {
+          if (part.text) {
+            textParts.push(part.text);
+            sseEnqueue(controller, 'token', { text: part.text });
+          } else if (part.functionCall) {
+            functionCalls.push(part.functionCall);
+          }
+        }
+        if (cand?.finishReason) finishReason = cand.finishReason;
+        if (obj?.usageMetadata) usage = obj.usageMetadata;
+      } catch (e) {
+        console.warn('[chat] SSE parse', e?.message);
+      }
+    }
+  }
+  return { textParts, functionCalls, usage, finishReason };
+}
+
+function summarizeToolResult(result) {
+  if (!result || typeof result !== 'object') return '';
+  if (result.error) return `❌ ${result.error}`;
+  if (typeof result.total === 'number' && typeof result.returned === 'number') return `${result.returned}/${result.total}건`;
+  if (result.found === true) return '1건 찾음';
+  if (result.found === false) return '찾지 못함';
+  if (result.ok) return 'OK';
+  return '완료';
+}
+
+function runAgentStream({ initialContents, systemInstruction, tools, model, maxOutputTokens, routing, cacheKey, isAdmin }) {
+  let contents = initialContents;
+  const allTextParts = [];
+  const allToolCalls = [];
+  const totalUsage = { in: 0, out: 0, cached: 0 };
+  let lastFinishReason = null;
 
   return new ReadableStream({
     async start(controller) {
-      const reader = upstreamBody.getReader();
       try {
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buffer += decoder.decode(value, { stream: true });
-
-          // SSE 라인 단위 파싱 (data: {...}\n\n)
-          let idx;
-          while ((idx = buffer.indexOf('\n')) !== -1) {
-            const rawLine = buffer.slice(0, idx);
-            buffer = buffer.slice(idx + 1);
-            const line = rawLine.trim();
-            if (!line.startsWith('data:')) continue;
-            const dataStr = line.slice(5).trim();
-            if (!dataStr) continue;
-            try {
-              const obj = JSON.parse(dataStr);
-              const cand = obj?.candidates?.[0];
-              const text = cand?.content?.parts?.map((p) => p.text).filter(Boolean).join('') || '';
-              if (text) {
-                accumulated += text;
-                controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: 'token', text })}\n\n`));
-              }
-              if (cand?.finishReason) lastFinishReason = cand.finishReason;
-              if (obj?.usageMetadata) lastUsage = obj.usageMetadata;
-            } catch (e) {
-              console.warn('[chat] SSE parse error', e?.message, dataStr.slice(0, 200));
-            }
+        for (let iter = 0; iter < AGENT_MAX_ITERATIONS; iter++) {
+          let upstream;
+          try {
+            upstream = await callGemini({ model, contents, systemInstruction, tools, maxOutputTokens });
+          } catch (e) {
+            sseEnqueue(controller, 'error', { error: 'Gemini API 호출 실패', detail: String(e?.message || e) });
+            controller.close();
+            return;
           }
+          if (!upstream.ok || !upstream.body) {
+            const errText = await upstream.text().catch(() => '');
+            sseEnqueue(controller, 'error', { error: `Gemini API error (${upstream.status})`, detail: errText.slice(0, 500) });
+            controller.close();
+            return;
+          }
+
+          const { textParts, functionCalls, usage, finishReason } = await pipeGeminiStream(upstream.body, controller);
+          allTextParts.push(...textParts);
+          if (usage) {
+            totalUsage.in     += usage.promptTokenCount        || 0;
+            totalUsage.out    += usage.candidatesTokenCount    || 0;
+            totalUsage.cached += usage.cachedContentTokenCount || 0;
+          }
+          if (finishReason) lastFinishReason = finishReason;
+
+          // function call 없음 → 응답 완료
+          if (functionCalls.length === 0) {
+            const accumulated = allTextParts.join('').trim() || '죄송합니다. 응답을 생성하지 못했습니다.';
+            const costUsd = estimateCostUsd(model, {
+              promptTokenCount: totalUsage.in,
+              candidatesTokenCount: totalUsage.out,
+              cachedContentTokenCount: totalUsage.cached,
+            });
+            const doneBody = {
+              answer: accumulated,
+              model,
+              routing: { ...routing, iterations: iter + 1, toolCallCount: allToolCalls.length },
+              finishReason: lastFinishReason,
+              tokens: {
+                in:     totalUsage.in     || null,
+                out:    totalUsage.out    || null,
+                cached: totalUsage.cached || 0,
+                total:  totalUsage.in + totalUsage.out || null,
+              },
+              cost_usd: costUsd,
+              tool_calls: allToolCalls,
+              monthly_budget_usd: Number(process.env.GEMINI_MONTHLY_BUDGET_USD || 50),
+            };
+            // 도구 호출이 있었던 응답은 캐시 X (다음에도 도구 실행 필요)
+            if (cacheKey && allToolCalls.length === 0 && !accumulated.includes('```action')) {
+              cacheSet(cacheKey, doneBody);
+            }
+            sseEnqueue(controller, 'done', doneBody);
+            controller.close();
+            return;
+          }
+
+          // 도구 실행 (병렬)
+          const callResults = await Promise.all(functionCalls.map(async (call) => {
+            sseEnqueue(controller, 'tool_call', { name: call.name, args: call.args });
+            allToolCalls.push({ name: call.name, args: call.args, iteration: iter + 1 });
+            const result = await executeServerTool(call.name, call.args, { isAdmin });
+            sseEnqueue(controller, 'tool_result', { name: call.name, summary: summarizeToolResult(result) });
+            return { call, result };
+          }));
+
+          // 다음 contents 구성: 이전 model turn (text + functionCall) + user turn (functionResponse[])
+          contents = [
+            ...contents,
+            {
+              role: 'model',
+              parts: [
+                ...textParts.map((t) => ({ text: t })),
+                ...functionCalls.map((c) => ({ functionCall: c })),
+              ],
+            },
+            {
+              role: 'user',
+              parts: callResults.map(({ call, result }) => ({
+                functionResponse: { name: call.name, response: result },
+              })),
+            },
+          ];
         }
 
-        const costUsd = estimateCostUsd(model, lastUsage || {});
-        const cleanAnswer = accumulated.trim() || '죄송합니다. 응답을 생성하지 못했습니다. 다시 시도해 주세요.';
-        const doneBody = {
-          answer: cleanAnswer,
-          model,
-          routing,
-          finishReason: lastFinishReason,
-          tokens: {
-            in:     lastUsage?.promptTokenCount        || null,
-            out:    lastUsage?.candidatesTokenCount    || null,
-            cached: lastUsage?.cachedContentTokenCount || 0,
-            total:  lastUsage?.totalTokenCount         || null,
-          },
-          cost_usd: costUsd,
-          monthly_budget_usd: Number(process.env.GEMINI_MONTHLY_BUDGET_USD || 50),
-        };
-
-        // 💰 캐시 저장 — 도구 호출 응답은 캐시 X (매번 실행해야 함)
-        if (cacheKey && !cleanAnswer.includes('```action')) {
-          cacheSet(cacheKey, doneBody);
-        }
-
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: 'done', ...doneBody })}\n\n`));
+        sseEnqueue(controller, 'error', { error: 'Agent loop max iterations reached', iterations: AGENT_MAX_ITERATIONS });
         controller.close();
       } catch (e) {
-        console.error('[chat] stream transform failed', e);
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: 'error', error: String(e?.message || e) })}\n\n`));
+        console.error('[agent]', e);
+        sseEnqueue(controller, 'error', { error: String(e?.message || e) });
         controller.close();
       }
     },
   });
 }
+
 
 /* ============================================================
    System prompt — splits into STATIC (cacheable) + DYNAMIC (per-call)
@@ -444,22 +539,27 @@ ${posts.filter((p) => p.published !== false).slice(0, 6).map((p) => `- ${p.title
 6. 본문 텍스트 + 액션 블록 함께 (액션만 안 됨)
 `;
 
-  // ─── 정적 운영자 도구 정의 (운영자 데이터는 제외, 시그니처만) ───
-  // 이 부분은 isAdmin 여부에 따라 다르지만, 같은 isAdmin이면 항상 동일 → 캐시 가능
+  // ─── 운영자 모드 안내 (도구 시그니처는 Gemini의 tools 필드로 별도 전달, 여기엔 사용 지침만) ───
   const adminToolsStatic = !isAdmin ? '' : `
 ---
 # 🔑 운영자 모드
 - 톤: 동료처럼 짧고 명확 (예: "OK, 처리했어요" / "핫리드 3건")
-- 권한 확장: create_lead 세션 제한 해제 / 모든 도구 사용
+- 권한 확장: 모든 Function Calling 도구 사용 / 모든 액션 도구(create_lead 등) 사용
 - 회사 소개·영업 톤 불필요 (운영자는 이미 다 앎)
 
-## 운영자 전용 도구 (시그니처)
-| 도구 | 트리거 | 필수 |
-|---|---|---|
-| \`list_callback_requests\` | "통화 요청 보여줘" | status=pending |
-| \`mark_task_done\` | "○○ 처리 완료" | taskId, note |
-| \`summarize_chat\` | "○○ 세션 요약" | sessionId |
-| \`update_lead_stage\` | "○○ 단계 변경" | leadId, stage(new/consult/quote/contract/won/lost) |
+## ⚙️ 도구 사용 규칙 (운영자가 데이터 질문 시)
+- "○○ 누구야" / "○○ 정보" → \`leads_find\` 호출
+- "이번주/오늘 신규 리드" / "○○ 단계 리드 목록" → \`leads_list\` 호출
+- "○○ 단계 won/lost로 바꿔" → \`leads_update\` 호출
+- "리드 통계" / "이번달 몇 건" → \`leads_stats\` 호출
+- "통화 요청 보여줘" / "발송 가능 follow-up" → \`tasks_list\` 호출
+- "○○ 작업 처리완료/취소" → \`tasks_update\` 호출
+- "○○ 키워드 대화 검색" → \`chatlogs_search\` 호출
+- "○○ 세션 요약/내용" → \`chatlogs_get\` 호출
+- "케이스 목록" → \`cases_list\` 호출
+- "견적서 목록" → \`quotes_list\` 호출
+- **절대 데이터를 추측하지 말 것**. 데이터 질문은 무조건 도구 호출.
+- 도구 결과를 받으면 자연어로 요약·정리해서 답변. 원본 JSON 노출 금지.
 `;
 
   // 🧊 staticPrompt: 매 호출에서 비트단위로 동일 → Gemini Implicit Caching 발동
@@ -479,31 +579,12 @@ ${guide}
 이제 위의 정보와 도구를 활용해 ${isAdmin ? '운영자 작업을 효율적으로 도와' : '사용자의 요청에 답하'}세요. ${isAdmin ? '간결하고 빠르게 답변하세요.' : '사용자가 "대신 해줘"라고 요청하면 적극적으로 도구를 호출해 직접 처리하세요. 정보에 없는 내용은 추측하지 말고 상담 미팅으로 유도하세요.'}`;
 
   // 🔄 dynamicPreamble: 호출별 변경되는 부분 → contents 첫 user 메시지로 주입
+  // 🛠 운영 데이터(chatLogs/leads/scheduledTasks)는 더 이상 dump하지 않음 — AI가 도구 호출로 직접 조회
   const dynamicParts = [];
 
   // 운영자 이름 (auth.name이 콜마다 다를 수 있음)
   if (isAdmin && auth?.name) {
-    dynamicParts.push(`[운영자: ${auth.name}님]`);
-  }
-
-  // 운영 컨텍스트 (chatLogs/leads/scheduledTasks)
-  if (isAdmin) {
-    const opLines = [];
-    if (chatLogs.length) {
-      opLines.push(`### 챗봇 대화 (${chatLogs.length}건)\n` +
-        chatLogs.slice(-5).map((l) => `[${l.sessionId}] ${(l.messages || []).slice(-3).map((m) => `${m.role[0]}:${(m.text || '').slice(0, 100)}`).join(' | ')}`).join('\n'));
-    }
-    if (leads.length) {
-      opLines.push(`### 리드 (${leads.length}건)\n` +
-        leads.slice(-10).map((l) => `- ${l.name} | ${l.email || '-'} | ${l.type} | ${l.status}${l.source === 'chatbot-ai' ? ' 🤖' : ''}`).join('\n'));
-    }
-    if (scheduledTasks.length) {
-      opLines.push(`### 작업 큐 (${scheduledTasks.length}건)\n` +
-        scheduledTasks.slice(0, 8).map((t) => `- [${t.type}] ${t.leadName || t.leadEmail} | ${t.subject || t.topic || ''} | ${t.status}`).join('\n'));
-    }
-    if (opLines.length) {
-      dynamicParts.push(`## 운영 컨텍스트 (현재 상태)\n${opLines.join('\n\n')}`);
-    }
+    dynamicParts.push(`[운영자: ${auth.name}님 (${auth.email})]`);
   }
 
   // A/B variant 톤
