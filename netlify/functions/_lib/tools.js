@@ -21,6 +21,53 @@ const MAX_TEXT = 80;          // 긴 문자열 truncate 길이
 const MAX_LIST_DEFAULT = 10;  // list 도구 기본 반환 갯수
 const MAX_LIST_HARD = 30;     // list 도구 최대 반환 갯수
 
+/* ============================================================
+   💰 옵션 4: 도구 결과 LRU 캐시 (5분 TTL)
+   - 운영자가 같은 질문 반복 (예: "신규 리드", "통화 요청") 시 캐시 hit
+   - Write 계열 도구(update)는 캐시 안 함 (mutation은 항상 실행)
+   - Function instance가 warm 상태에서만 유효 (cold start 시 리셋)
+   ============================================================ */
+const TOOL_CACHE_TTL_MS = 5 * 60 * 1000;
+const TOOL_CACHE_MAX = 100;
+const toolCache = new Map();
+
+// 읽기 전용 도구만 캐시 — mutation은 항상 실행
+const READ_ONLY_TOOLS = new Set([
+  'leads_find', 'leads_list', 'leads_stats',
+  'tasks_list',
+  'chatlogs_search', 'chatlogs_get',
+  'cases_find', 'cases_list',
+  'faqs_find',
+  'quotes_list',
+]);
+
+function makeToolCacheKey(name, args) {
+  // args를 정렬해서 같은 인자는 같은 키
+  const sorted = Object.keys(args || {}).sort().reduce((o, k) => { o[k] = args[k]; return o; }, {});
+  return `${name}::${JSON.stringify(sorted)}`;
+}
+
+function toolCacheGet(key) {
+  const e = toolCache.get(key);
+  if (!e) return null;
+  if (Date.now() - e.at > TOOL_CACHE_TTL_MS) {
+    toolCache.delete(key);
+    return null;
+  }
+  // LRU: 최근 접근을 뒤로
+  toolCache.delete(key);
+  toolCache.set(key, e);
+  return e.data;
+}
+
+function toolCacheSet(key, data) {
+  if (toolCache.size >= TOOL_CACHE_MAX) {
+    const oldest = toolCache.keys().next().value;
+    if (oldest) toolCache.delete(oldest);
+  }
+  toolCache.set(key, { at: Date.now(), data });
+}
+
 function getBlobsStore() {
   return getStore({ name: STORE_NAME, consistency: 'strong' });
 }
@@ -78,13 +125,13 @@ export const TOOL_CATALOG = {
     adminOnly: true,
     declaration: {
       name: 'leads_find',
-      description: '이름·이메일·전화번호로 리드 1건을 찾는다. 운영자가 특정 고객 정보를 물어볼 때 사용.',
+      description: 'Find one lead by name/email/phone.',
       parameters: {
         type: 'object',
         properties: {
-          name: { type: 'string', description: '리드 이름 (부분 매칭 OK)' },
-          email: { type: 'string', description: '이메일' },
-          phone: { type: 'string', description: '전화번호' },
+          name: { type: 'string' },
+          email: { type: 'string' },
+          phone: { type: 'string' },
         },
       },
     },
@@ -120,14 +167,14 @@ export const TOOL_CATALOG = {
     adminOnly: true,
     declaration: {
       name: 'leads_list',
-      description: '조건에 맞는 리드 목록을 가져온다. 단계·기간·소스 필터 가능.',
+      description: 'List leads, filtered.',
       parameters: {
         type: 'object',
         properties: {
           status: { type: 'string', description: 'new|consult|quote|contract|won|lost' },
-          since: { type: 'string', description: '7d, 30d, today, week, month (예: "7d" = 최근 7일)' },
-          source: { type: 'string', description: 'chatbot-ai, website, etc' },
-          limit: { type: 'number', description: '최대 30, 기본 10' },
+          since: { type: 'string', description: '7d|30d|today|week|month' },
+          source: { type: 'string' },
+          limit: { type: 'number' },
         },
       },
     },
@@ -158,16 +205,16 @@ export const TOOL_CATALOG = {
     adminOnly: true,
     declaration: {
       name: 'leads_update',
-      description: '리드의 단계(status)·예산·메모를 수정한다. 운영자만 사용.',
+      description: 'Update a lead (status/type/budget/note).',
       parameters: {
         type: 'object',
         required: ['id'],
         properties: {
-          id: { type: 'string', description: '리드 ID' },
+          id: { type: 'string' },
           status: { type: 'string', description: 'new|consult|quote|contract|won|lost' },
           type: { type: 'string' },
           budget: { type: 'string' },
-          note: { type: 'string', description: '메모 추가 (기존 message 뒤에 누적)' },
+          note: { type: 'string' },
         },
       },
     },
@@ -191,11 +238,11 @@ export const TOOL_CATALOG = {
     adminOnly: true,
     declaration: {
       name: 'leads_stats',
-      description: '리드 단계별 카운트와 기간 합계 등 통계 숫자만 빠르게 가져온다.',
+      description: 'Lead counts by status/source.',
       parameters: {
         type: 'object',
         properties: {
-          since: { type: 'string', description: '7d, 30d, month (생략 시 전체)' },
+          since: { type: 'string', description: '7d|30d|month' },
         },
       },
     },
@@ -225,13 +272,13 @@ export const TOOL_CATALOG = {
     adminOnly: true,
     declaration: {
       name: 'tasks_list',
-      description: '예약된 작업(통화 요청·follow-up 메일)을 조회한다.',
+      description: 'List scheduled tasks (callbacks/followups).',
       parameters: {
         type: 'object',
         properties: {
-          type: { type: 'string', description: 'callback_request | followup_email | (전체 생략)' },
-          status: { type: 'string', description: 'pending | done | cancelled (기본 pending)' },
-          urgency: { type: 'string', description: 'urgent | normal' },
+          type: { type: 'string', description: 'callback_request|followup_email' },
+          status: { type: 'string', description: 'pending|done|cancelled' },
+          urgency: { type: 'string', description: 'urgent|normal' },
           limit: { type: 'number' },
         },
       },
@@ -267,13 +314,13 @@ export const TOOL_CATALOG = {
     adminOnly: true,
     declaration: {
       name: 'tasks_update',
-      description: '작업 상태를 변경한다 (처리 완료, 취소 등).',
+      description: 'Update task status.',
       parameters: {
         type: 'object',
         required: ['id', 'status'],
         properties: {
           id: { type: 'string' },
-          status: { type: 'string', description: 'done | cancelled | pending' },
+          status: { type: 'string', description: 'done|cancelled|pending' },
           note: { type: 'string' },
         },
       },
@@ -301,13 +348,13 @@ export const TOOL_CATALOG = {
     adminOnly: true,
     declaration: {
       name: 'chatlogs_search',
-      description: '챗봇 대화에서 키워드를 검색한다. 매칭된 세션 ID 목록을 반환.',
+      description: 'Search chat sessions by keyword.',
       parameters: {
         type: 'object',
         required: ['keyword'],
         properties: {
           keyword: { type: 'string' },
-          since: { type: 'string', description: '7d, 30d (기본 30d)' },
+          since: { type: 'string', description: '7d|30d' },
           limit: { type: 'number' },
         },
       },
@@ -339,7 +386,7 @@ export const TOOL_CATALOG = {
     adminOnly: true,
     declaration: {
       name: 'chatlogs_get',
-      description: '특정 세션의 챗봇 대화 전체를 가져온다.',
+      description: 'Get full chat session by ID.',
       parameters: {
         type: 'object',
         required: ['sessionId'],
@@ -372,13 +419,13 @@ export const TOOL_CATALOG = {
     adminOnly: false,
     declaration: {
       name: 'cases_find',
-      description: '키워드/태그로 레퍼런스 케이스를 검색해 가장 관련 있는 1~3건을 반환. 고객이 "○○ 사례 있어요?" 같은 질문할 때 사용.',
+      description: 'Search reference cases by keyword/tag.',
       parameters: {
         type: 'object',
         properties: {
-          keyword: { type: 'string', description: '검색 키워드 (제목/클라이언트/설명에서 매칭)' },
-          tag: { type: 'string', description: '태그 (예: 이커머스, AI, 금융권)' },
-          limit: { type: 'number', description: '최대 5, 기본 3' },
+          keyword: { type: 'string' },
+          tag: { type: 'string' },
+          limit: { type: 'number' },
         },
       },
     },
@@ -417,11 +464,11 @@ export const TOOL_CATALOG = {
     adminOnly: true,
     declaration: {
       name: 'cases_list',
-      description: '(운영자용) 비공개 포함 모든 케이스 목록.',
+      description: 'List all cases (incl. private).',
       parameters: {
         type: 'object',
         properties: {
-          published: { type: 'boolean', description: 'true=공개만, false=비공개만, 생략=전체' },
+          published: { type: 'boolean' },
           limit: { type: 'number' },
         },
       },
@@ -453,12 +500,12 @@ export const TOOL_CATALOG = {
     adminOnly: false,
     declaration: {
       name: 'faqs_find',
-      description: 'FAQ에서 질문 키워드로 가장 관련 있는 답변을 찾는다.',
+      description: 'Find FAQ entries by keyword.',
       parameters: {
         type: 'object',
         required: ['keyword'],
         properties: {
-          keyword: { type: 'string', description: '질문 키워드' },
+          keyword: { type: 'string' },
         },
       },
     },
@@ -490,11 +537,11 @@ export const TOOL_CATALOG = {
     adminOnly: true,
     declaration: {
       name: 'quotes_list',
-      description: '견적서 목록 (AI 초안/검토 중/발송 등 상태별).',
+      description: 'List quotes.',
       parameters: {
         type: 'object',
         properties: {
-          status: { type: 'string', description: 'ai-draft | reviewed | sent | accepted | rejected' },
+          status: { type: 'string', description: 'ai-draft|reviewed|sent|accepted|rejected' },
           since: { type: 'string' },
           limit: { type: 'number' },
         },
@@ -535,13 +582,27 @@ export function getToolDeclarations({ isAdmin }) {
     .map((t) => t.declaration);
 }
 
-/** 도구 이름 → 실행 결과 (서버 측). 인증 검증 후 핸들러 실행. */
+/** 도구 이름 → 실행 결과 (서버 측). 인증 검증 + 5분 LRU 캐시 + 핸들러 실행. */
 export async function executeServerTool(name, args, { isAdmin }) {
   const tool = TOOL_CATALOG[name];
   if (!tool) return { error: 'unknown_tool', name };
   if (tool.adminOnly && !isAdmin) return { error: 'permission_denied', name };
+
+  // 💰 캐시 조회 (read-only 도구만)
+  const cacheKey = READ_ONLY_TOOLS.has(name) ? makeToolCacheKey(name, args) : null;
+  if (cacheKey) {
+    const cached = toolCacheGet(cacheKey);
+    if (cached) {
+      return { ...cached, _cached: true };
+    }
+  }
+
   try {
-    return await tool.handler(args || {});
+    const result = await tool.handler(args || {});
+    if (cacheKey && !result?.error) {
+      toolCacheSet(cacheKey, result);
+    }
+    return result;
   } catch (e) {
     console.error(`[tool ${name}] failed`, e);
     return { error: 'tool_execution_failed', detail: String(e?.message || e) };

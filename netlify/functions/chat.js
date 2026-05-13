@@ -217,11 +217,14 @@ export default async (req) => {
 
 /* ============================================================
    🤖 Agent Loop — Gemini Function Calling 사이클
-   - Gemini가 functionCall을 반환하면 서버에서 실행 → 결과 다시 보내고 응답 받음
-   - 최대 5회 반복 (안전장치)
+   - Iter 1: full systemInstruction(2.1K) + tools(~300)        → AI가 도구 선택
+   - Iter 2+: SUMMARIZER_INSTRUCTION (~50 tokens), tools 없음   → AI가 결과 요약만
    - text는 즉시 클라이언트로 스트림, tool_call/tool_result는 별도 SSE 이벤트
    ============================================================ */
 const AGENT_MAX_ITERATIONS = 5;
+
+// 🪶 Iter 2+ 전용 경량 요약 프롬프트 — 시스템 프롬프트 2,100 → 60 토큰으로 축소
+const SUMMARIZER_INSTRUCTION = `You are 함께워크_SI assistant. Summarize the tool result above for the user in concise Korean (존댓말, max 3 sentences, highlight key numbers/names). Do NOT call any more tools. If admin user, use peer tone; if customer, use friendly polite tone.`;
 
 function sseEnqueue(controller, type, data) {
   controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ type, ...data })}\n\n`));
@@ -320,9 +323,17 @@ function runAgentStream({ initialContents, systemInstruction, tools, model, maxO
     async start(controller) {
       try {
         for (let iter = 0; iter < AGENT_MAX_ITERATIONS; iter++) {
+          // 🪶 옵션 3: Iter 1은 full system + tools, Iter 2+는 경량 요약 프롬프트(60 토큰) + tools 없음
+          // → Iter 2+의 입력에서 (시스템 2,100 + 도구 ~300) - 60 = ~2,300 토큰 절감
+          const isFirstIter = iter === 0;
+          const iterSystem = isFirstIter
+            ? systemInstruction
+            : { parts: [{ text: SUMMARIZER_INSTRUCTION }] };
+          const iterTools = isFirstIter ? tools : undefined;
+
           let upstream;
           try {
-            upstream = await callGemini({ model, contents, systemInstruction, tools, maxOutputTokens });
+            upstream = await callGemini({ model, contents, systemInstruction: iterSystem, tools: iterTools, maxOutputTokens });
           } catch (e) {
             sseEnqueue(controller, 'error', { error: 'Gemini API 호출 실패', detail: String(e?.message || e) });
             controller.close();
@@ -539,27 +550,12 @@ ${posts.filter((p) => p.published !== false).slice(0, 6).map((p) => `- ${p.title
 6. 본문 텍스트 + 액션 블록 함께 (액션만 안 됨)
 `;
 
-  // ─── 운영자 모드 안내 (도구 시그니처는 Gemini의 tools 필드로 별도 전달, 여기엔 사용 지침만) ───
+  // ─── 운영자 모드 안내 — 도구 카탈로그는 tools 필드로 별도 전달, 여기엔 짧은 사용 정책만 ───
   const adminToolsStatic = !isAdmin ? '' : `
 ---
 # 🔑 운영자 모드
-- 톤: 동료처럼 짧고 명확 (예: "OK, 처리했어요" / "핫리드 3건")
-- 권한 확장: 모든 Function Calling 도구 사용 / 모든 액션 도구(create_lead 등) 사용
-- 회사 소개·영업 톤 불필요 (운영자는 이미 다 앎)
-
-## ⚙️ 도구 사용 규칙 (운영자가 데이터 질문 시)
-- "○○ 누구야" / "○○ 정보" → \`leads_find\` 호출
-- "이번주/오늘 신규 리드" / "○○ 단계 리드 목록" → \`leads_list\` 호출
-- "○○ 단계 won/lost로 바꿔" → \`leads_update\` 호출
-- "리드 통계" / "이번달 몇 건" → \`leads_stats\` 호출
-- "통화 요청 보여줘" / "발송 가능 follow-up" → \`tasks_list\` 호출
-- "○○ 작업 처리완료/취소" → \`tasks_update\` 호출
-- "○○ 키워드 대화 검색" → \`chatlogs_search\` 호출
-- "○○ 세션 요약/내용" → \`chatlogs_get\` 호출
-- "케이스 목록" → \`cases_list\` 호출
-- "견적서 목록" → \`quotes_list\` 호출
-- **절대 데이터를 추측하지 말 것**. 데이터 질문은 무조건 도구 호출.
-- 도구 결과를 받으면 자연어로 요약·정리해서 답변. 원본 JSON 노출 금지.
+톤: 동료처럼 짧고 명확. 영업 톤 X.
+도구 정책: 데이터 질문 시 반드시 도구 호출, 추측·암기 금지. 결과 JSON은 자연어로 요약(원본 노출 X).
 `;
 
   // 🧊 staticPrompt: 매 호출에서 비트단위로 동일 → Gemini Implicit Caching 발동
