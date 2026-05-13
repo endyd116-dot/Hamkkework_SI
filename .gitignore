@@ -12,4 +12,4 @@ node_modules/
 *.original.png
 
 # Claude Code 로컬 설정 (PC별 개인 설정 — 푸시 안 함)
-.claude/settings.json
+.claude/settings*.json
