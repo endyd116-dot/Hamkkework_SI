@@ -331,6 +331,16 @@
       <div class="calc-panel">
 
         <div class="calc-group">
+          <div class="calc-h">⓪ 개발 수준 <span class="hint" style="font-weight:400">선택 시 페이지·모듈·연동 합계에 가중치 적용 (AI 라인은 별도)</span></div>
+          <div class="calc-tier-grid" id="tier_grid">
+            <!-- calculator.js가 동적으로 렌더 -->
+          </div>
+          <div class="calc-tier-detail" id="tier_detail" aria-live="polite">
+            <!-- 선택된 단계의 포함 작업 목록 -->
+          </div>
+        </div>
+
+        <div class="calc-group">
           <div class="calc-h">① 화면 · 페이지</div>
           <div class="calc-row">
             <div class="lbl">단순 페이지<span class="hint">도메인·목록·상세 등 정적 UI / 30만원·페이지</span></div>
@@ -418,7 +428,8 @@
           <div class="calc-bd-row"><span class="l">화면 · 페이지</span><span class="v" id="bd_pages">390 만</span></div>
           <div class="calc-bd-row"><span class="l">기능 모듈</span><span class="v" id="bd_modules">900 만</span></div>
           <div class="calc-bd-row"><span class="l">외부 연동</span><span class="v" id="bd_integ">300 만</span></div>
-          <div class="calc-bd-row"><span class="l">AI 기능</span><span class="v" id="bd_ai">0 만</span></div>
+          <div class="calc-bd-row" id="bd_tier_row"><span class="l">개발 수준 <span class="hint" id="bd_tier_label">중규모 ×1.0</span></span><span class="v" id="bd_tier_adj">0 만</span></div>
+          <div class="calc-bd-row"><span class="l">AI 기능 <span class="hint">가중치 미적용</span></span><span class="v" id="bd_ai">0 만</span></div>
           <div class="calc-bd-row"><span class="l">QA · PM (25%)</span><span class="v" id="bd_overhead">397 만</span></div>
         </div>
 

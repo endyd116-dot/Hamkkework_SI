@@ -8,6 +8,72 @@
 const NS = 'hamkkework';
 const VERSION = 1;
 
+/* ============================================================
+   기본 개발 수준 4단계 (가중치)
+   - AI 라인(LLM/RAG/Agent/파인튜닝)은 가중치 미적용
+   - 페이지·모듈·외부연동 합계에만 × multiplier 적용
+   - 어드민에서 편집 가능 (name, multiplier, description, includes)
+   ============================================================ */
+export const DEFAULT_QUALITY_TIERS = [
+  {
+    id: 'mvp',
+    name: 'MVP 개발',
+    multiplier: 0.5,
+    description: '1-2개 핵심 기능만 실작동, 나머지는 목업/더미. 아이디어 검증·투자 데모용.',
+    includes: [
+      '핵심 플로우 1-2개만 실제 구현',
+      '나머지 페이지는 UI 목업 + 더미 데이터',
+      '기본 반응형 / 단일 환경 (prod만)',
+      '간단 README 외 문서 없음',
+      '안정화 1주 (긴급 버그만 대응)',
+    ],
+  },
+  {
+    id: 'small',
+    name: '소규모 프로젝트',
+    multiplier: 0.75,
+    description: '전 페이지·전 기능 실작동. 스타트업 초기 서비스 / 사내 도구.',
+    includes: [
+      '전 페이지·전 기능 실제 작동',
+      '핵심 플로우 수동 QA 통과',
+      '간단한 운영 가이드 1장',
+      '단위 테스트 일부 (핵심 함수만)',
+      '안정화 2주',
+    ],
+  },
+  {
+    id: 'medium',
+    name: '중규모 프로젝트',
+    multiplier: 1.0,
+    description: '표준 운영 수준. 일반 기업 / B2C 서비스 / 위시켓·크몽 평균.',
+    includes: [
+      '단위 + 통합 테스트',
+      'API 명세 문서 (OpenAPI)',
+      '운영 모니터링 기본 (에러 로그, 가동률)',
+      '권한·인증 표준 적용',
+      '2환경 분리 (staging / prod)',
+      '안정화 4주 + 6개월 하자보증',
+    ],
+  },
+  {
+    id: 'large',
+    name: '대규모 프로젝트',
+    multiplier: 2.0,
+    description: '중견·대기업·금융권 수준. 컴플라이언스·SLA·감사 대응 필요.',
+    includes: [
+      '코드리뷰 + PR 워크플로우 (2인 승인)',
+      '단위·통합·E2E 테스트 (커버리지 80%+)',
+      'APM 모니터링 + 알람 + 가용성 99.9% SLA',
+      '이중화·HA 구성 + 무중단 배포',
+      '부하 테스트 + 캐파 산정 리포트',
+      '보안 감사 (OWASP Top10 + 취약점 진단)',
+      '권한 시스템 + 전체 감사 로그',
+      '3환경 (dev/staging/prod) + 롤백 절차',
+      '안정화 8주 + 12개월 하자보증',
+    ],
+  },
+];
+
 const KEYS = {
   meta: `${NS}.meta`,
   seed: `${NS}.seedLoaded`,
@@ -189,7 +255,16 @@ export async function ensureSeed() {
     if (!read(KEYS.cases)) write(KEYS.cases, seed.cases || []);
     if (!read(KEYS.faqs)) write(KEYS.faqs, seed.faqs || []);
     if (!read(KEYS.posts)) write(KEYS.posts, seed.blog_posts || []);
-    if (!read(KEYS.pricing)) write(KEYS.pricing, seed.pricing_rates || {});
+    {
+      const existingPricing = read(KEYS.pricing);
+      const seedPricing = seed.pricing_rates || {};
+      if (!existingPricing) {
+        write(KEYS.pricing, { ...seedPricing, tiers: DEFAULT_QUALITY_TIERS, activeTier: 'medium' });
+      } else if (!existingPricing.tiers) {
+        // 기존 사용자 마이그레이션 — 가중치 없으면 기본 4단계 깔아줌
+        write(KEYS.pricing, { ...existingPricing, tiers: DEFAULT_QUALITY_TIERS, activeTier: existingPricing.activeTier || 'medium' });
+      }
+    }
     if (!read(KEYS.chatConfig)) {
       write(KEYS.chatConfig, {
         greeting: '안녕하세요! 함께워크_SI AI 상담입니다. 가격·레퍼런스·AI 도입 등 무엇이든 물어보세요.',

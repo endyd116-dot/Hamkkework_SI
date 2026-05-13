@@ -5,7 +5,7 @@
  * - Push quote → lead form hidden field
  */
 
-import { store } from './store.js';
+import { store, DEFAULT_QUALITY_TIERS } from './store.js';
 
 const fmt = (n) => Math.round(n).toLocaleString('ko-KR');
 
@@ -16,6 +16,7 @@ const state = {
   mod_advanced: 1,
   integrations: 1,
   ai: { llm_simple: false, rag: false, agent: false, finetune: false },
+  tier: 'medium', // 개발 수준 (mvp / small / medium / large)
 };
 
 let rates = {
@@ -27,13 +28,24 @@ let rates = {
   ai: { llm_simple: 200, rag: 1200, agent: 1800, finetune: 2500 },
   overhead_ratio: 0.25,
   range_ratio: 0.15,
+  tiers: DEFAULT_QUALITY_TIERS,
 };
 
 function loadRates() {
   const r = store.pricing.get();
   if (r && Object.keys(r).length) {
-    rates = { ...rates, ...r, ai: { ...rates.ai, ...(r.ai || {}) } };
+    rates = {
+      ...rates,
+      ...r,
+      ai: { ...rates.ai, ...(r.ai || {}) },
+      tiers: Array.isArray(r.tiers) && r.tiers.length ? r.tiers : DEFAULT_QUALITY_TIERS,
+    };
   }
+  if (r && r.activeTier) state.tier = r.activeTier;
+}
+
+function getActiveTier() {
+  return rates.tiers.find((t) => t.id === state.tier) || rates.tiers[2] || DEFAULT_QUALITY_TIERS[2];
 }
 
 function calculate() {
@@ -44,11 +56,21 @@ function calculate() {
     (sum, k) => sum + (state.ai[k] ? rates.ai[k] || 0 : 0),
     0
   );
-  const sub = pages + modules + integ + ai;
+  // 가중치는 페이지·모듈·외부연동 합계에만 적용 (AI 라인은 미적용)
+  const tier = getActiveTier();
+  const mult = tier.multiplier ?? 1;
+  const baseNonAi = pages + modules + integ;
+  const adjustedNonAi = baseNonAi * mult;
+  const tierAdj = adjustedNonAi - baseNonAi; // 가중치로 인한 가감(±)
+  const sub = adjustedNonAi + ai;
   const overhead = sub * (rates.overhead_ratio ?? 0.25);
   const total = sub + overhead;
   const r = rates.range_ratio ?? 0.15;
-  return { pages, modules, integ, ai, sub, overhead, total, lo: total * (1 - r), hi: total * (1 + r) };
+  return {
+    pages, modules, integ, ai, sub, overhead, total,
+    lo: total * (1 - r), hi: total * (1 + r),
+    tier, mult, tierAdj,
+  };
 }
 
 function render() {
@@ -63,12 +85,51 @@ function render() {
   document.getElementById('range_text').textContent =
     `실 견적 범위: ${fmt(c.lo)}만 ~ ${fmt(c.hi)}만 (±${pct}%)`;
 
+  // 가중치 표시
+  const tierLabel = document.getElementById('bd_tier_label');
+  const tierAdj = document.getElementById('bd_tier_adj');
+  if (tierLabel) tierLabel.textContent = `${c.tier.name} ×${c.mult}`;
+  if (tierAdj) {
+    const sign = c.tierAdj > 0 ? '+' : c.tierAdj < 0 ? '−' : '';
+    tierAdj.textContent = c.tierAdj === 0 ? '0 만' : `${sign}${fmt(Math.abs(c.tierAdj))} 만`;
+    tierAdj.style.color = c.tierAdj > 0 ? 'var(--cobalt-deep)' : c.tierAdj < 0 ? 'var(--steel)' : '';
+  }
+
   const quoteHidden = document.getElementById('lf_quote');
   if (quoteHidden) {
-    quoteHidden.value = JSON.stringify({ ...state, total: Math.round(c.total) });
+    quoteHidden.value = JSON.stringify({ ...state, total: Math.round(c.total), tierMultiplier: c.mult });
   }
 
   pushSparkPoint(c.total);
+}
+
+function renderTierUI() {
+  const grid = document.getElementById('tier_grid');
+  const detail = document.getElementById('tier_detail');
+  if (!grid) return;
+
+  grid.innerHTML = rates.tiers.map((t) => `
+    <button type="button" class="calc-tier-btn ${t.id === state.tier ? 'on' : ''}" data-tier="${t.id}">
+      <span class="tn">${t.name}</span>
+      <span class="tm">×${t.multiplier}</span>
+    </button>
+  `).join('');
+
+  grid.querySelectorAll('.calc-tier-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      state.tier = btn.dataset.tier;
+      renderTierUI();
+      render();
+    });
+  });
+
+  if (detail) {
+    const t = getActiveTier();
+    detail.innerHTML = `
+      <div class="tier-desc">${t.description || ''}</div>
+      <ul>${(t.includes || []).map((x) => `<li>${x}</li>`).join('')}</ul>
+    `;
+  }
 }
 
 /* Sparkline trail of recent quote totals */
@@ -143,7 +204,17 @@ function wireControls() {
 export function bootCalculator() {
   loadRates();
   wireControls();
+  renderTierUI();
   render();
+
+  // 어드민에서 가격/가중치 변경 시 즉시 재반영
+  window.addEventListener('store:change', (e) => {
+    if (e.detail?.key?.endsWith('.pricing')) {
+      loadRates();
+      renderTierUI();
+      render();
+    }
+  });
 
   // 🤖 Allow chatbot agent to fill the calculator via custom event
   window.addEventListener('calc:setState', (e) => {
@@ -155,6 +226,10 @@ export function bootCalculator() {
     if (next.integrations != null) state.integrations = Number(next.integrations) || 0;
     if (next.ai) {
       state.ai = { ...state.ai, ...next.ai };
+    }
+    if (next.tier && rates.tiers.some((t) => t.id === next.tier)) {
+      state.tier = next.tier;
+      renderTierUI();
     }
     // sync visible values
     ['pages_simple', 'pages_complex', 'mod_basic', 'mod_advanced', 'integrations'].forEach((k) => {

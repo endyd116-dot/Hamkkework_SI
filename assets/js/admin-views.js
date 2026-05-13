@@ -3,7 +3,7 @@
  * Each view exports a render function that returns the HTML and an optional `mount` hook.
  */
 
-import { store, utils, ensureSeed } from './store.js';
+import { store, utils, ensureSeed, DEFAULT_QUALITY_TIERS } from './store.js';
 import { $, $$, escapeHtml, fmt, toast, openDrawer, closeDrawer, downloadJson, downloadCsv, emptyState, md } from './admin-ui.js';
 
 await ensureSeed();
@@ -2488,6 +2488,31 @@ function openClientDrawer(id) {
 /* ============================================================
    13. Settings
    ============================================================ */
+function renderTierEditor(tiers, activeId) {
+  return `
+    <div class="adm-row" style="display:flex;align-items:center;gap:12px;margin-bottom:12px">
+      <label style="font-weight:600">메인페이지 기본 선택:</label>
+      <select id="tier_active" style="padding:6px 10px;border-radius:6px;border:1px solid var(--line, #ddd)">
+        ${tiers.map((t) => `<option value="${t.id}" ${t.id === activeId ? 'selected' : ''}>${escapeHtml(t.name)} (×${t.multiplier})</option>`).join('')}
+      </select>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px">
+      ${tiers.map((t, i) => `
+        <div class="adm-tier-card" data-idx="${i}" style="border:1.5px solid var(--line,#e5e7eb);border-radius:10px;padding:14px;background:var(--bg-soft,#fafafa)">
+          <div class="adm-row" style="display:flex;gap:8px;margin-bottom:8px">
+            <input class="tf-name" placeholder="단계명" value="${escapeHtml(t.name||'')}" style="flex:2;padding:6px 10px;border-radius:6px;border:1px solid var(--line,#ddd);font-weight:600">
+            <input class="tf-mult" type="number" step="0.05" min="0" placeholder="×" value="${t.multiplier ?? 1}" style="flex:1;padding:6px 10px;border-radius:6px;border:1px solid var(--line,#ddd);text-align:right">
+          </div>
+          <input type="hidden" class="tf-id" value="${escapeHtml(t.id||'')}">
+          <textarea class="tf-desc" placeholder="짧은 정의 (한 줄)" rows="2" style="width:100%;padding:6px 10px;border-radius:6px;border:1px solid var(--line,#ddd);margin-bottom:8px;font-family:inherit;resize:vertical">${escapeHtml(t.description||'')}</textarea>
+          <label style="font-size:12px;color:var(--steel,#666);display:block;margin-bottom:4px">포함 작업 (한 줄에 하나씩)</label>
+          <textarea class="tf-inc" rows="6" style="width:100%;padding:6px 10px;border-radius:6px;border:1px solid var(--line,#ddd);font-family:inherit;font-size:12.5px;resize:vertical">${escapeHtml((t.includes||[]).join('\n'))}</textarea>
+        </div>
+      `).join('')}
+    </div>
+  `;
+}
+
 export function renderSettings() {
   const s = store.settings.get();
   const p = store.pricing.get();
@@ -2537,6 +2562,19 @@ export function renderSettings() {
     </div>
 
     <div class="adm-card">
+      <h3>개발 수준 (가중치)</h3>
+      <div class="desc">
+        프로젝트 규모·품질 수준에 따른 가중치입니다. <b>페이지·모듈·외부연동</b> 합계에 곱해지며, <b>AI 라인은 가중치 미적용</b>입니다.<br>
+        AI 챗봇이 사용자 요구를 듣고 자동으로 단계를 판단해 견적을 산출하며, 포함 작업 목록은 응답의 근거로 사용됩니다.
+      </div>
+      <div id="tier_editor">
+        ${renderTierEditor(p.tiers || DEFAULT_QUALITY_TIERS, p.activeTier || 'medium')}
+      </div>
+      <button class="adm-btn" id="tier_save">개발 수준 저장</button>
+      <button class="adm-btn secondary" id="tier_reset" style="margin-left:8px">기본값으로 초기화</button>
+    </div>
+
+    <div class="adm-card">
       <h3>데이터 관리</h3>
       <div class="desc">현재 데이터는 브라우저 localStorage에 저장됩니다. 정기적으로 백업하세요.</div>
       <button class="adm-btn secondary" id="bkBtn">전체 백업 (JSON)</button>
@@ -2559,7 +2597,9 @@ export function mountSettings() {
     toast('설정이 저장되었습니다', 'success');
   });
   $('#pr_save')?.addEventListener('click', () => {
+    const existing = store.pricing.get() || {};
     store.pricing.set({
+      ...existing, // tiers/activeTier 등 보존
       pages_simple: Number($('#pr_ps').value) || 30,
       pages_complex: Number($('#pr_pc').value) || 80,
       mod_basic: Number($('#pr_mb').value) || 200,
@@ -2575,6 +2615,30 @@ export function mountSettings() {
       },
     });
     toast('가격표가 저장되었습니다. 메인페이지에 즉시 반영됩니다.', 'success');
+  });
+
+  $('#tier_save')?.addEventListener('click', () => {
+    const cards = document.querySelectorAll('#tier_editor .adm-tier-card');
+    const tiers = Array.from(cards).map((c) => ({
+      id: c.querySelector('.tf-id').value.trim(),
+      name: c.querySelector('.tf-name').value.trim() || '(이름 없음)',
+      multiplier: Math.max(0, Number(c.querySelector('.tf-mult').value) || 0),
+      description: c.querySelector('.tf-desc').value.trim(),
+      includes: c.querySelector('.tf-inc').value.split('\n').map((s) => s.trim()).filter(Boolean),
+    })).filter((t) => t.id);
+    if (!tiers.length) { toast('단계가 비어 있어 저장하지 않았습니다.', 'error'); return; }
+    const activeTier = $('#tier_active').value || tiers[0].id;
+    const existing = store.pricing.get() || {};
+    store.pricing.set({ ...existing, tiers, activeTier });
+    toast('개발 수준이 저장되었습니다.', 'success');
+  });
+
+  $('#tier_reset')?.addEventListener('click', () => {
+    if (!confirm('기본 4단계로 초기화하시겠어요? 현재 편집 내용은 사라집니다.')) return;
+    const existing = store.pricing.get() || {};
+    store.pricing.set({ ...existing, tiers: DEFAULT_QUALITY_TIERS, activeTier: 'medium' });
+    toast('기본값으로 초기화되었습니다.', 'success');
+    window.rerenderView?.();
   });
   $('#bkBtn')?.addEventListener('click', () => {
     const dump = {

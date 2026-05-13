@@ -418,6 +418,7 @@ async function executeAction(action) {
       });
 
       // Update calculator state by dispatching a custom event handled in calculator.js
+      const VALID_TIERS = new Set(['mvp', 'small', 'medium', 'large']);
       window.dispatchEvent(new CustomEvent('calc:setState', {
         detail: {
           pages_simple: data.pages_simple ?? 0,
@@ -426,6 +427,7 @@ async function executeAction(action) {
           mod_advanced: data.mod_advanced ?? 0,
           integrations: data.integrations ?? 0,
           ai: data.ai || {},
+          ...(VALID_TIERS.has(data.tier) ? { tier: data.tier } : {}),
         },
       }));
 

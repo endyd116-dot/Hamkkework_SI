@@ -809,6 +809,73 @@ section {
   font-weight: 700;
 }
 
+/* ---- 개발 수준 (가중치) 그리드 ---- */
+.calc-tier-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  margin: 8px 0 12px;
+}
+@media (max-width: 720px) {
+  .calc-tier-grid { grid-template-columns: repeat(2, 1fr); }
+}
+.calc-tier-btn {
+  border: 1.5px solid var(--line);
+  background: var(--bg-soft);
+  border-radius: var(--r-md);
+  padding: 12px 10px;
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+  transition: all var(--d-fast);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.calc-tier-btn:hover {
+  border-color: var(--cobalt);
+  background: var(--cobalt-softer);
+}
+.calc-tier-btn.on {
+  border-color: var(--cobalt);
+  background: var(--cobalt-softer);
+  box-shadow: var(--shadow-glow);
+}
+.calc-tier-btn .tn {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ink-deep);
+}
+.calc-tier-btn .tm {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--cobalt-deep);
+  letter-spacing: 0.04em;
+}
+.calc-tier-detail {
+  background: var(--bg-soft);
+  border-radius: var(--r-md);
+  padding: 14px 16px;
+  font-size: 13px;
+  color: var(--ink);
+  line-height: 1.6;
+}
+.calc-tier-detail .tier-desc {
+  margin-bottom: 8px;
+  color: var(--ink-deep);
+  font-weight: 500;
+}
+.calc-tier-detail ul {
+  margin: 0;
+  padding-left: 18px;
+  list-style: disc;
+}
+.calc-tier-detail li {
+  margin: 2px 0;
+  font-size: 12.5px;
+  color: var(--steel);
+}
+
 .calc-result {
   background: var(--ink-deep);
   color: #fff;

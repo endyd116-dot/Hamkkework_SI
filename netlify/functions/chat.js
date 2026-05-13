@@ -511,13 +511,53 @@ function buildSystemPrompt(context, extra, mode = {}) {
 - 약속: 라인별 견적 / 6개월 무상 하자보증 / 소스 100% 양도 / 100% 완주 / 결제 30·40·30
 `;
 
+  const tiers = Array.isArray(pricing.tiers) && pricing.tiers.length ? pricing.tiers : [
+    { id: 'mvp', name: 'MVP 개발', multiplier: 0.5 },
+    { id: 'small', name: '소규모 프로젝트', multiplier: 0.75 },
+    { id: 'medium', name: '중규모 프로젝트', multiplier: 1.0 },
+    { id: 'large', name: '대규모 프로젝트', multiplier: 2.0 },
+  ];
+  const tiersBlock = tiers.map((t) => {
+    const inc = (t.includes || []).slice(0, 6).join(' · ');
+    return `- **${t.name}** (id=${t.id}, ×${t.multiplier}): ${t.description || ''}${inc ? ` [포함: ${inc}]` : ''}`;
+  }).join('\n');
+
   const pricingTable = `
 ## 가격표 (단위: 만원, +${Math.round((pricing.overhead_ratio ?? 0.25) * 100)}% 오버헤드, ±${Math.round((pricing.range_ratio ?? 0.15) * 100)}% 범위)
 - 페이지: 단순 ${pricing.pages_simple ?? 30} / 복잡 ${pricing.pages_complex ?? 80} (개당)
 - 모듈: 기본 ${pricing.mod_basic ?? 200} / 고급 ${pricing.mod_advanced ?? 500} (개당)
 - 외부 연동(PG/SSO/ERP/API): ${pricing.integrations ?? 300} (건당)
-- AI 라인(별도): LLM 호출 +${pricing.ai?.llm_simple ?? 200} / RAG +${pricing.ai?.rag ?? 1200} / 에이전트 +${pricing.ai?.agent ?? 1800} / 파인튜닝 +${pricing.ai?.finetune ?? 2500}
+- AI 라인(별도, **가중치 미적용**): LLM 호출 +${pricing.ai?.llm_simple ?? 200} / RAG +${pricing.ai?.rag ?? 1200} / 에이전트 +${pricing.ai?.agent ?? 1800} / 파인튜닝 +${pricing.ai?.finetune ?? 2500}
 - 운영비(토큰·벡터DB·GPU·인프라·도메인·SSL)는 월 별도 정산 또는 클라이언트 직접 지불
+
+## 개발 수준 (가중치) — 페이지·모듈·외부연동 합계에만 적용
+${tiersBlock}
+
+## 견적 산출 규칙 (필수)
+견적/얼마/예산/얼만큼 등 가격 관련 질문이면:
+1. 사용자 발화에서 페이지 수, 모듈 종류, 외부연동, AI 라인, **개발 수준(MVP/소/중/대)**을 추출
+2. 누락된 정보는 **합리적 가정**으로 보충 (예: "10페이지" → 단순 10, 복잡 0 가정 / "예약 시스템" → 회원·예약·결제 3개 모듈 가정)
+3. 개발 수준이 명시 안 됐으면 사용자 표현에서 추론:
+   - "MVP/검증/데모/투자/베타" → mvp (×0.5)
+   - "스타트업/사내/간단/빠르게" → small (×0.75)
+   - "정식/표준/일반 운영" → medium (×1.0)
+   - "대기업/금융/공공/엔터프라이즈/SLA/보안감사" → large (×2.0)
+4. **계산을 직접 보여줄 것** — 라인별 금액, 가중치 적용, 오버헤드, 범위까지
+5. 가정·근거를 명시 후 "정확한 견적은 30분 무료 상담에서 RFP 확인 후 ±15% 조정" 추가
+6. \`prefill_quote\` 도구 호출로 견적 계산기 자동 채움 (tier 포함)
+
+### 견적 답변 예시 (이 형식을 따를 것)
+사용자: "10페이지 + AI 에이전트로 견적, 스타트업이라 빠르게 가야 해"
+답:
+"라인별 견적 초안입니다 (가중치: 소규모 프로젝트 ×0.75):
+- 페이지 단순 10개 × 30만원 = 300만원
+- 외부 연동·모듈 없음 가정
+- 위 합계 × 0.75(소규모 가중치) = 225만원
+- AI 에이전트 라인 = 1,800만원 (가중치 미적용)
+- 소계 = 2,025만원 / 오버헤드 25% = 506만원
+- **총 2,531만원** (±15% 범위: 2,151만~2,911만)
+
+가정: 모든 페이지 단순 UI, 외부 연동 0건, 기능 모듈 0개. RFP/요건 확인 후 ±15% 범위에서 조정됩니다. 30분 무료 상담에서 정식 견적 드릴게요. [상담](/#contact) · [Pricing](/#pricing)"
 `;
 
   const caseList = cases.length > 0 ? `
@@ -542,9 +582,10 @@ ${posts.filter((p) => p.published !== false).slice(0, 6).map((p) => `- ${p.title
 
   const guide = `
 ## 응답 가이드 (필수)
-- 한국어 존댓말, **최대 3문장 / 150자**, 1문장 권장. 운영자 모드는 더 짧게.
-- 모르는 정보 → "30분 무료 상담에서 안내" 유도, 추측 금지
-- 가격 → [Pricing](/#pricing) 권유 / 레퍼런스 → 위 케이스 1-2개 인용
+- 한국어 존댓말. **일반 답변은 최대 3문장 / 150자**, 1문장 권장. 운영자 모드는 더 짧게.
+- **견적 답변은 글자 제한 면제** — 위 "견적 산출 규칙"의 형식대로 계산을 모두 보여줄 것
+- 모르는 정보 → "30분 무료 상담에서 안내" 유도, 추측 금지 (단 견적은 합리적 가정으로 산출)
+- 레퍼런스 → 위 케이스 1-2개 인용
 - AI = "박힌 AI" 강조 (단순 챗봇 아님)
 - 답변 끝 1줄로 [상담](/#contact) 자연스럽게 유도
 - 무관 주제 정중 거절 + 본업 유도, 타사 직접 비판 금지
@@ -566,7 +607,7 @@ ${posts.filter((p) => p.published !== false).slice(0, 6).map((p) => `- ${p.title
 | \`create_lead\` | 본인 정보로 "신청해줘"/"등록해줘" | name, email |
 | \`prefill_contact\` | "폼 채워줘"/"직접 제출할게" | (모두 선택) |
 | \`navigate\` | "○○ 보여줘"/"○○ 열어줘" | target |
-| \`prefill_quote\` | "○○ 견적 얼마?" 액수 추정 | pages_simple, pages_complex, mod_basic, mod_advanced, integrations, ai{} |
+| \`prefill_quote\` | "○○ 견적 얼마?" 액수 추정 | pages_simple, pages_complex, mod_basic, mod_advanced, integrations, ai{}, **tier** |
 | \`draft_quote\` | "정식 견적서 만들어줘" | clientName, items[], overhead |
 | \`create_case_draft\` | (운영자) 케이스 추가 | label, client, title |
 | \`draft_blog_post\` | "블로그 글 써줘" | title, slug, content |
@@ -580,6 +621,7 @@ ${posts.filter((p) => p.published !== false).slice(0, 6).map((p) => `- ${p.title
 - request_pm_callback.method: phone | email | kakao
 - request_pm_callback.urgency: normal | urgent
 - prefill_quote.ai keys: llm_simple, rag, agent, finetune (모두 boolean)
+- prefill_quote.tier: mvp | small | medium | large (생략 시 현재 선택 유지)
 
 ### 대표 예시 (create_lead — 가장 흔한 케이스)
 \`\`\`action
