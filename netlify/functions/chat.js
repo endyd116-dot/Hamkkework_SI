@@ -675,12 +675,20 @@ ${posts.filter((p) => p.published !== false).slice(0, 6).map((p) => `- ${p.title
 `;
 
   const tools = `
-## 🛠 AI 에이전트 도구 (총 9개)
+## 🛠 AI 에이전트 도구 — 2 종류 (혼동 금지)
 
-도구 호출 시 응답 본문에 다음 코드 블록 포함 (사용자 화면엔 안 보임):
+### A. 클라이언트 액션 도구 (\`\`\`action JSON 블록으로 호출)
+브라우저에서 실행되는 UI 액션 — 페이지 이동·폼 채우기·시각 효과 등.
+응답 본문에 다음 코드 블록 포함 (사용자 화면엔 안 보임):
 \`\`\`action
 {"tool":"<이름>","data":{...}}
 \`\`\`
+**이 형식으로 호출할 도구**: create_lead, prefill_contact, navigate, prefill_quote, draft_quote, create_case_draft, draft_blog_post, schedule_followup, request_pm_callback
+
+### B. 서버 데이터 도구 (Native Function Calling으로 자동 호출)
+Netlify Blobs DB의 실제 데이터 조회/변경. AI가 functionCall로 호출하면 서버가 즉시 실행.
+**절대로 \`\`\`action 형식으로 출력하지 말 것** — 형식 다르면 무시되고 저장 안 됨.
+**이 형식으로 호출할 도구 (운영자 전용)**: leads_find/list/update/stats, tasks_list/update, chatlogs_search/get, cases_find/list, faqs_find, quotes_list, **get_bot_instruction, update_bot_instruction**
 
 ### 도구 시그니처 (트리거 → 도구 → 필수 필드)
 
@@ -760,10 +768,11 @@ ${posts.filter((p) => p.published !== false).slice(0, 6).map((p) => `- ${p.title
 
 ## 챗봇 행동 지침 변경 절차 (중요)
 운영자가 "다음부터 사용자한테 이름·연락처 받으라고 해" 같은 영구 행동 변경을 요청하면:
-1. update_bot_instruction 도구 호출 (instruction에 새 규칙을 짧고 명확하게)
-2. 결과의 note를 답변에 포함 — "다음 사용자 응답부터 적용됩니다"
+1. **update_bot_instruction을 Native Function Calling으로 호출** (instruction에 새 규칙을 짧고 명확하게)
+   → 절대로 \`\`\`action JSON 블록으로 출력하지 말 것 (서버 데이터 도구이므로 형식 다르면 무시됨)
+2. 도구 결과의 note를 답변에 자연어로 풀어서 포함 — "다음 사용자 응답부터 적용됩니다"
 3. **절대로 도구 호출 없이 "알겠습니다"라고만 답하지 말 것** (실제 저장 안 되면 무의미)
-4. 모호하면 1회만 짧게 확인 ("'append'로 추가할까요, 기존 규칙 전부 'replace'할까요?")
+4. 모호하면 1회만 짧게 확인 ("새 규칙으로 추가할까요, 기존 규칙 전부 교체할까요?")
 
 질문이 모호하면 한 번만 되묻기. 절대 leads_find로 카운트하지 말 것 (전체 통계는 leads_stats).
 `;
