@@ -375,13 +375,17 @@ export const utils = { uid, nowIso };
   if (t === 'dark') document.documentElement.setAttribute('data-theme', 'dark');
 })();
 
-// Boot: seed → 서버 sync → 주기 poll 시작
+// Boot: 서버 pull 먼저 → 그래도 비어있으면 시드 → push 마이그레이션 → 주기 poll
+// (이전 순서는 ensureSeed의 빈 시드값이 서버를 덮어쓰는 race condition 있음)
 (async function boot() {
+  // 1) 먼저 서버에서 pull — 서버에 데이터 있으면 로컬 갱신, 비어있으면 noop
+  //    pushIfEmpty:false → 이 단계에선 절대 서버에 쓰지 않음 (덮어쓰기 방지)
+  const pulledChanged = await syncPullAll({ pushIfEmpty: false });
+  // 2) 시드 — 로컬에 (서버에서 받은 후에도) 데이터 없으면 기본값 시드
   await ensureSeed();
-  // 첫 sync: 서버에 데이터 있으면 가져오고, 없으면 로컬 데이터를 서버에 push (마이그레이션)
-  const initialChanged = await syncPullAll({ pushIfEmpty: true });
-  // 초기 sync로 데이터가 바뀌었으면 화면 다시 그리기 (어드민이 마운트된 후일 경우)
-  if (initialChanged) {
+  // 3) 두 번째 sync — 시드된 데이터가 있고 서버는 여전히 비어있으면 그제서야 push
+  const seedChanged = await syncPullAll({ pushIfEmpty: true });
+  if (pulledChanged || seedChanged) {
     setTimeout(() => window.rerenderView?.(), 500);
   }
   // 30초마다 서버 변경 사항 자동 반영 (다른 기기/브라우저에서 들어온 변경)
