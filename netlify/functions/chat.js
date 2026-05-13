@@ -793,7 +793,7 @@ Netlify Blobs DB의 실제 데이터 조회/변경. AI가 functionCall로 호출
 - "그 후보 추가해줘/frozen으로 저장해줘" → frozen_response_create (PM 동의 후 호출)
 - "○○ 견적서 만들어줘/견적서 등록해줘" → create_quote (clientName/items/total 필수)
 - "○○ 메일 발송 완료 표시/방금 보냈어" → mark_email_sent (emailDrafts.id 필요)
-- "○○ 콜백 취소/작업 삭제/취소해줘" → delete_task (status 변경이 아니라 완전 삭제 시)
+- "○○ 콜백 취소/작업 삭제/취소해줘" → tasks_delete (status 변경이 아니라 완전 삭제 시. id 1개씩 호출, 여러 건이면 한 번에 1건씩 순차)
 
 ## 📧 이메일 발송 (send_email) 사용 가이드
 - 이메일 본문은 운영자가 별도 검수 없이 그대로 발송될 수 있으므로 **공손한 한국어 + 회사 시그니처** 포함:

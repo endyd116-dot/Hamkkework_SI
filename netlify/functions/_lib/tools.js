@@ -709,13 +709,13 @@ export const TOOL_CATALOG = {
   },
 
   // ─────────────────────────────────────────────────────────
-  // 작업 삭제 (delete_task) — 콜백/팔로업 취소
+  // 작업 삭제 (tasks_delete) — 콜백/팔로업 취소
   // ─────────────────────────────────────────────────────────
-  delete_task: {
+  tasks_delete: {
     adminOnly: true,
     declaration: {
-      name: 'delete_task',
-      description: 'Delete a task from scheduledTasks. Use for cancellation. Differs from tasks_update which marks status; this removes entirely. Use when admin says "○○ 콜백 취소"/"삭제해줘".',
+      name: 'tasks_delete',
+      description: 'Delete a task from scheduledTasks. Use for cancellation. Differs from tasks_update which marks status; this removes entirely. Use when admin says "○○ 콜백 취소"/"삭제해줘". For multiple deletions, call once per id.',
       parameters: {
         type: 'object',
         required: ['id'],
