@@ -329,13 +329,18 @@ async function callGemini({ model, contents, systemInstruction, tools, maxOutput
   });
 }
 
-/** Upstream Gemini SSE 스트림을 파싱하면서 text는 즉시 controller로 전달, functionCalls는 모음 */
+/** Upstream Gemini SSE 스트림을 파싱.
+ *  - text는 즉시 controller로 전달
+ *  - functionCall part는 thoughtSignature 등 메타 포함해서 part 전체를 보관 (Gemini 3.x 요구사항)
+ *  - 다음 turn에 model role parts로 그대로 echo back해야 400 방지됨
+ */
 async function pipeGeminiStream(upstreamBody, controller) {
   const reader = upstreamBody.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
   const textParts = [];
-  const functionCalls = [];
+  const modelParts = []; // 다음 turn에 echo back할 model parts (text/functionCall/thoughtSignature 보존)
+  const functionCalls = []; // 도구 실행용 (편의)
   let usage = null;
   let finishReason = null;
 
@@ -358,8 +363,13 @@ async function pipeGeminiStream(upstreamBody, controller) {
           if (part.text) {
             textParts.push(part.text);
             sseEnqueue(controller, 'token', { text: part.text });
+            modelParts.push(part); // text part도 part 그대로 보존
           } else if (part.functionCall) {
             functionCalls.push(part.functionCall);
+            modelParts.push(part); // thoughtSignature 등 메타 포함된 part 전체 보존
+          } else {
+            // thought 등 기타 part도 echo back (alone thoughtSignature part가 별도로 오는 케이스 대비)
+            modelParts.push(part);
           }
         }
         if (cand?.finishReason) finishReason = cand.finishReason;
@@ -369,7 +379,7 @@ async function pipeGeminiStream(upstreamBody, controller) {
       }
     }
   }
-  return { textParts, functionCalls, usage, finishReason };
+  return { textParts, modelParts, functionCalls, usage, finishReason };
 }
 
 function summarizeToolResult(result) {
@@ -445,7 +455,7 @@ function runAgentStream({ initialContents, systemInstruction, tools, model, chai
             return;
           }
 
-          const { textParts, functionCalls, usage, finishReason } = await pipeGeminiStream(upstream.body, controller);
+          const { textParts, modelParts, functionCalls, usage, finishReason } = await pipeGeminiStream(upstream.body, controller);
           allTextParts.push(...textParts);
           if (usage) {
             totalUsage.in     += usage.promptTokenCount        || 0;
@@ -513,15 +523,18 @@ function runAgentStream({ initialContents, systemInstruction, tools, model, chai
             return { call, result };
           }));
 
-          // 다음 contents 구성: 이전 model turn (text + functionCall) + user turn (functionResponse[])
+          // 다음 contents 구성: 이전 model turn의 parts를 그대로 echo back
+          // (Gemini 3.x는 functionCall part의 thoughtSignature까지 같이 보내야 400 방지)
           contents = [
             ...contents,
             {
               role: 'model',
-              parts: [
-                ...textParts.map((t) => ({ text: t })),
-                ...functionCalls.map((c) => ({ functionCall: c })),
-              ],
+              parts: modelParts && modelParts.length
+                ? modelParts
+                : [
+                    ...textParts.map((t) => ({ text: t })),
+                    ...functionCalls.map((c) => ({ functionCall: c })),
+                  ],
             },
             {
               role: 'user',
