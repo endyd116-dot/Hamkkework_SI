@@ -41,8 +41,12 @@ const COMPLEX_KEYWORDS = [
   '분석', '요약', '초안', '견적서', '제안서',
   'PM', '박두용', '통화 요청', '연락 받', '연락받',
   '카톡', '메일 보내', '발송', '예약', '리드',
+  '견적', '얼마', '비용', '예산', '얼만큼', '얼마나',
   'create', 'analyze', 'summarize',
 ];
+
+// 견적 요청 키워드 — 매칭 시 출력 토큰 한도 상향 (라인별 계산이 잘리지 않도록)
+const QUOTE_KEYWORDS = ['견적', '얼마', '예산', '얼만큼', '비용'];
 
 function selectModel({ isAdmin, lastText, conversationLength }) {
   if (isAdmin) return MODEL_FLASH;
@@ -52,8 +56,11 @@ function selectModel({ isAdmin, lastText, conversationLength }) {
   return MODEL_LITE;
 }
 
-function maxTokensFor({ isAdmin, model }) {
-  if (isAdmin) return 600;
+function maxTokensFor({ isAdmin, model, lastText }) {
+  if (isAdmin) return 800;
+  // 견적 요청은 라인별 계산이 잘리지 않도록 상향
+  const isQuote = QUOTE_KEYWORDS.some((k) => (lastText || '').includes(k));
+  if (isQuote) return 900;
   return model === MODEL_FLASH ? 500 : 250;
 }
 
@@ -179,7 +186,7 @@ export default async (req) => {
     lastText: last.text,
     conversationLength: messages.length,
   });
-  const maxOutputTokens = maxTokensFor({ isAdmin, model });
+  const maxOutputTokens = maxTokensFor({ isAdmin, model, lastText: last.text });
   const routing = {
     tier: model === MODEL_FLASH ? 'flash' : 'lite',
     maxOutputTokens,
