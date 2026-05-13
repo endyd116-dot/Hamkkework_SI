@@ -20,7 +20,7 @@
  *   GEMINI_PRICE_{FLASH|LITE}_{IN|OUT} / GEMINI_MONTHLY_BUDGET_USD
  */
 
-import { getToolDeclarations, executeServerTool, getToolSummary } from './_lib/tools.js';
+import { getToolDeclarations, executeServerTool, getToolSummary, readChatConfigForServer } from './_lib/tools.js';
 
 /* ============================================================
    모델 체인 — 사용자 정의 폴백 순서
@@ -168,10 +168,22 @@ export default async (req) => {
     }
   }
 
+  // 🔄 어드민이 update_bot_instruction으로 변경한 systemPromptExtra는 Blobs에 있음.
+  // 클라 polling이 30초 걸리므로 서버에서 직접 읽어 즉시 반영 (서버값 우선).
+  // 실패해도 클라 값으로 폴백 (Blobs 일시 장애 안전망).
+  let effectiveExtra = systemPromptExtra || '';
+  try {
+    const serverCfg = await readChatConfigForServer();
+    const serverExtra = serverCfg?.systemPromptExtra;
+    if (typeof serverExtra === 'string') effectiveExtra = serverExtra;
+  } catch (e) {
+    console.warn('[chat] chatConfig 서버 조회 실패, 클라 값 사용:', e?.message);
+  }
+
   // 🧊 #1 IMPLICIT CACHING — system prompt를 정적/동적으로 분리
   // 정적 부분 (회사·가격·케이스·FAQ·도구·가이드)은 systemInstruction에 → Gemini 자동 캐시 (-75%)
   // 동적 부분 (운영자 데이터·variant 톤·extra)은 contents 첫 user 메시지로 주입
-  const { staticPrompt, dynamicPreamble } = buildSystemPrompt(context, systemPromptExtra, { isAdmin, auth, variant });
+  const { staticPrompt, dynamicPreamble } = buildSystemPrompt(context, effectiveExtra, { isAdmin, auth, variant });
 
   // Convert internal {role, text} → Gemini {role, parts}
   let contents = messages

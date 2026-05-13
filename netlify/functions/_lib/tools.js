@@ -105,6 +105,13 @@ async function writeChatConfig(cfg) {
   await store.setJSON('chatConfig', cfg);
 }
 
+/** chat.js에서 호출 — 매 응답마다 최신 행동 지침을 Blobs에서 직접 가져옴
+ *  (클라이언트 polling 30초 지연을 우회해 update 직후 즉시 적용)
+ */
+export async function readChatConfigForServer() {
+  return readChatConfig();
+}
+
 function truncate(s, n = MAX_TEXT) {
   if (!s) return '';
   s = String(s);
