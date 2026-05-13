@@ -595,21 +595,25 @@ export const TOOL_CATALOG = {
   },
 
   // ─────────────────────────────────────────────────────────
-  // 챗봇 행동 지침 (chatConfig.systemPromptExtra) — 2개 도구
-  // 운영자가 자연어로 "다음부터 ㅇㅇ해줘" 하면 영구 저장 →
-  // 다음 사용자 채팅부터 자동 적용
+  // 챗봇 행동 지침 (chatConfig.botRules[]) — 2개 도구
+  // 운영자가 자연어로 "다음부터 ㅇㅇ해줘" 하면 botRules에 영구 저장 →
+  // 다음 사용자 채팅부터 자동 적용. 어드민 페이지에서 PM이 CRUD 가능.
   // ─────────────────────────────────────────────────────────
   get_bot_instruction: {
     adminOnly: true,
     declaration: {
       name: 'get_bot_instruction',
-      description: 'Get the current bot behavior instruction (systemPromptExtra). Use when admin asks what the bot is currently set to do.',
+      description: 'List all current bot behavior rules. Each rule has id, text, source(ai/pm), createdAt. Use when admin asks what the bot is currently set to do.',
       parameters: { type: 'object', properties: {} },
     },
     async handler() {
       const cfg = await readChatConfig();
-      const extra = cfg.systemPromptExtra || '';
-      return { instruction: extra || '(현재 추가 행동 지침 없음)', length: extra.length };
+      const rules = getEffectiveBotRules(cfg);
+      if (!rules.length) return { rules: [], count: 0, summary: '현재 추가 행동 지침 없음' };
+      return {
+        count: rules.length,
+        rules: rules.map((r) => ({ id: r.id, text: truncate(r.text, 200), source: r.source, createdAt: r.createdAt })),
+      };
     },
   },
 
@@ -617,13 +621,13 @@ export const TOOL_CATALOG = {
     adminOnly: true,
     declaration: {
       name: 'update_bot_instruction',
-      description: 'Update the bot behavior instruction (systemPromptExtra). Affects ALL future customer conversations. Use when admin says "from now on bot should X" / "다음부터 ㅇㅇ해줘" / "고객한테 ㅇㅇ 받으라고 해" 등.',
+      description: 'Add a new bot behavior rule. Affects ALL future customer conversations. Use when admin says "from now on bot should X" / "다음부터 ㅇㅇ해줘" / "고객한테 ㅇㅇ 받으라고 해" 등. Stored in botRules with source="ai" so PM can edit/delete it later in admin UI.',
       parameters: {
         type: 'object',
         required: ['instruction'],
         properties: {
-          instruction: { type: 'string', description: '새 지침 텍스트 (한국어 OK). 짧고 명확하게.' },
-          mode: { type: 'string', description: 'append (기본, 기존 규칙에 한 줄 추가) | replace (전체 교체)' },
+          instruction: { type: 'string', description: '새 지침 텍스트 (한국어 OK). 짧고 명확하게. 한 규칙 = 한 줄.' },
+          mode: { type: 'string', description: 'append (기본, 새 규칙 추가) | replace_all (기존 모든 규칙 삭제 후 이것만 남김)' },
         },
       },
     },
@@ -632,29 +636,55 @@ export const TOOL_CATALOG = {
         return { error: 'instruction_required' };
       }
       const cfg = await readChatConfig();
-      const existing = cfg.systemPromptExtra || '';
+      const existing = getEffectiveBotRules(cfg);
       const m = (mode || 'append').toLowerCase();
-      const trimmed = String(instruction).trim();
-      let next;
-      if (m === 'replace') {
-        next = trimmed;
-      } else {
-        // append: bullet 마커 자동 prepend (이미 있으면 그대로)
-        const formatted = /^[-•*]/.test(trimmed) ? trimmed : `- ${trimmed}`;
-        next = existing ? `${existing}\n${formatted}` : formatted;
-      }
-      await writeChatConfig({ ...cfg, systemPromptExtra: next });
+      const now = new Date().toISOString();
+      const newRule = {
+        id: 'r' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+        text: String(instruction).trim().replace(/^[-•*]\s*/, ''), // bullet 마커 제거
+        source: 'ai',
+        createdAt: now,
+        updatedAt: now,
+      };
+      const nextRules = m === 'replace_all' ? [newRule] : [...existing, newRule];
+      await writeChatConfig({
+        ...cfg,
+        botRules: nextRules,
+        // legacy systemPromptExtra도 함께 갱신 (마이그레이션 안 한 클라 호환)
+        systemPromptExtra: nextRules.map((r) => `- ${r.text}`).join('\n'),
+      });
       return {
         ok: true,
         mode: m,
-        previous: existing.slice(0, 80),
-        new_length: next.length,
-        added: m === 'append' ? trimmed.slice(0, 80) : null,
-        note: '다음 사용자 응답부터 자동 적용. 어드민 페이지의 챗봇 설정 textarea에도 반영됩니다(최대 30초 내).',
+        rule_id: newRule.id,
+        added_text: newRule.text.slice(0, 100),
+        total_rules: nextRules.length,
+        note: '다음 사용자 응답부터 즉시 적용. 어드민 페이지 > 챗봇 설정 > 행동 지침에서 편집·삭제 가능.',
       };
     },
   },
 };
+
+/** chatConfig에서 유효한 botRules 추출 — 마이그레이션 자동 처리
+ *  - botRules 배열 있으면 그것 사용
+ *  - 없고 legacy systemPromptExtra 있으면 한 줄씩 split해서 변환 (mem only, 저장은 다음 write 때)
+ */
+function getEffectiveBotRules(cfg) {
+  if (Array.isArray(cfg.botRules) && cfg.botRules.length > 0) return cfg.botRules;
+  if (Array.isArray(cfg.botRules)) return []; // 빈 배열 의도적
+  const legacy = (cfg.systemPromptExtra || '').trim();
+  if (!legacy) return [];
+  return legacy.split('\n')
+    .map((line) => line.replace(/^[-•*]\s*/, '').trim())
+    .filter(Boolean)
+    .map((text, i) => ({
+      id: 'legacy_' + i,
+      text,
+      source: 'pm',
+      createdAt: new Date(0).toISOString(),
+      updatedAt: new Date(0).toISOString(),
+    }));
+}
 
 /* ============================================================
    외부 노출 헬퍼

@@ -168,14 +168,17 @@ export default async (req) => {
     }
   }
 
-  // 🔄 어드민이 update_bot_instruction으로 변경한 systemPromptExtra는 Blobs에 있음.
-  // 클라 polling이 30초 걸리므로 서버에서 직접 읽어 즉시 반영 (서버값 우선).
-  // 실패해도 클라 값으로 폴백 (Blobs 일시 장애 안전망).
+  // 🔄 어드민이 update_bot_instruction으로 변경한 botRules는 Blobs에 있음.
+  // 클라 polling이 30초 걸리므로 서버에서 직접 읽어 즉시 반영.
+  // 우선순위: 서버 botRules → 서버 systemPromptExtra(legacy) → 클라 systemPromptExtra
   let effectiveExtra = systemPromptExtra || '';
   try {
     const serverCfg = await readChatConfigForServer();
-    const serverExtra = serverCfg?.systemPromptExtra;
-    if (typeof serverExtra === 'string') effectiveExtra = serverExtra;
+    if (Array.isArray(serverCfg?.botRules) && serverCfg.botRules.length > 0) {
+      effectiveExtra = serverCfg.botRules.map((r) => `- ${r.text}`).join('\n');
+    } else if (typeof serverCfg?.systemPromptExtra === 'string') {
+      effectiveExtra = serverCfg.systemPromptExtra;
+    }
   } catch (e) {
     console.warn('[chat] chatConfig 서버 조회 실패, 클라 값 사용:', e?.message);
   }

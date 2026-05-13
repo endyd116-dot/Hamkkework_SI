@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node --check netlify/functions/_lib/tools.js)"
+    ]
+  }
+}

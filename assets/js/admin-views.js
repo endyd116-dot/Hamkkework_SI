@@ -1585,14 +1585,24 @@ export function renderChatbot() {
     </div>
 
     <div class="adm-card">
-      <h3>응답 가이드 / 시스템 프롬프트 추가 지침</h3>
-      <div class="desc">이 텍스트는 Gemini의 시스템 프롬프트 끝에 추가됩니다. 회사 정보·가격·케이스는 자동으로 주입되니, 여기에는 <b>응답 톤·금지 사항·특별 안내</b>만 적어주세요.</div>
-      <div class="adm-field">
-        <label>추가 지침 (선택)</label>
-        <textarea id="cb_systemExtra" style="min-height:120px" placeholder="예: 답변은 항상 친근한 반말로 한다 / 5월 한정 이벤트가 있을 경우 안내한다 / 특정 기술 스택은 권하지 않는다 등">${escapeHtml(cfg.systemPromptExtra||'')}</textarea>
+      <h3>🤖 챗봇 행동 지침 (Behavior Rules)
+        <button class="adm-btn ghost sm" id="cb_addRule">+ 규칙 추가</button>
+      </h3>
+      <div class="desc">
+        모든 사용자 응답에 자동 적용되는 행동 규칙입니다. <b>AI가 추가한 규칙도 여기서 편집·삭제 가능</b>합니다.<br>
+        어드민 챗봇에 <code>"다음부터 ㅇㅇ해줘"</code>라고 말하면 AI가 자동으로 여기에 한 줄 추가합니다.
       </div>
+      <div id="cb_rules" style="display:grid;gap:8px;margin-top:12px"></div>
+      <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">
+        <button class="adm-btn" id="cb_rulesSave">규칙 저장</button>
+        <button class="adm-btn ghost sm" id="cb_rulesClear" style="margin-left:auto">전체 삭제</button>
+      </div>
+    </div>
+
+    <div class="adm-card">
+      <h3>인사 / 폴백 메시지</h3>
       <div class="adm-row">
-        <div class="adm-field"><label>인사 메시지</label><textarea id="cb_greeting">${escapeHtml(cfg.greeting||'')}</textarea></div>
+        <div class="adm-field"><label>인사 메시지 (챗봇 열 때 첫 인사)</label><textarea id="cb_greeting">${escapeHtml(cfg.greeting||'')}</textarea></div>
         <div class="adm-field"><label>매칭 실패 시 폴백 응답</label><textarea id="cb_fallback">${escapeHtml(cfg.fallback||'')}</textarea></div>
       </div>
     </div>
@@ -1635,6 +1645,124 @@ export function renderChatbot() {
 export function mountChatbot() {
   const cfg = store.chatConfig.get();
   let intents = [...(cfg.intents || [])];
+
+  // ── botRules: 챗봇 행동 지침 CRUD ──
+  // legacy systemPromptExtra(string) 마이그레이션: botRules 없으면 한 줄씩 split
+  function migrateLegacyRules() {
+    if (Array.isArray(cfg.botRules)) return [...cfg.botRules];
+    const legacy = (cfg.systemPromptExtra || '').trim();
+    if (!legacy) return [];
+    return legacy.split('\n')
+      .map((l) => l.replace(/^[-•*]\s*/, '').trim())
+      .filter(Boolean)
+      .map((text, i) => ({
+        id: 'legacy_' + i + '_' + Date.now().toString(36),
+        text,
+        source: 'pm',
+        createdAt: new Date(0).toISOString(),
+        updatedAt: new Date(0).toISOString(),
+      }));
+  }
+  let botRules = migrateLegacyRules();
+
+  function fmtRelDate(iso) {
+    if (!iso || iso.startsWith('1970')) return '';
+    try {
+      const d = new Date(iso);
+      const diff = Date.now() - d.getTime();
+      const days = Math.floor(diff / 86400000);
+      if (days === 0) return '오늘';
+      if (days === 1) return '어제';
+      if (days < 7) return `${days}일 전`;
+      return d.toISOString().slice(0, 10);
+    } catch { return ''; }
+  }
+
+  function renderRules() {
+    const host = $('#cb_rules');
+    if (!host) return;
+    if (botRules.length === 0) {
+      host.innerHTML = `<div style="padding:24px;text-align:center;color:var(--steel);background:var(--surface-soft);border-radius:8px;font-size:13px">행동 지침이 없습니다. "+ 규칙 추가" 또는 어드민 챗봇에 "다음부터 ㅇㅇ해줘"라고 말해보세요.</div>`;
+      return;
+    }
+    host.innerHTML = botRules.map((r, idx) => {
+      const badge = r.source === 'ai'
+        ? `<span style="background:#fef3c7;color:#92400e;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600">🤖 AI 추가</span>`
+        : `<span style="background:#dbeafe;color:#1e40af;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600">✍️ PM 작성</span>`;
+      const rel = fmtRelDate(r.createdAt);
+      return `
+        <div class="adm-card" style="padding:12px 14px;background:var(--surface-softer);display:flex;gap:10px;align-items:flex-start">
+          <div style="flex-shrink:0;font-weight:700;color:var(--steel);font-size:12px;padding-top:8px;min-width:24px">${idx + 1}.</div>
+          <div style="flex:1;display:flex;flex-direction:column;gap:6px">
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+              ${badge}
+              ${rel ? `<span style="font-size:11px;color:var(--steel)">${rel}</span>` : ''}
+            </div>
+            <textarea data-rule-idx="${idx}" data-rule-k="text" rows="2" style="width:100%;padding:6px 10px;border-radius:6px;border:1px solid var(--line,#ddd);font-family:inherit;resize:vertical;font-size:13.5px">${escapeHtml(r.text || '')}</textarea>
+          </div>
+          <button class="adm-btn ghost sm" data-rule-action="del" data-rule-idx="${idx}" style="flex-shrink:0;color:#dc2626" title="삭제">✕</button>
+        </div>
+      `;
+    }).join('');
+
+    host.querySelectorAll('[data-rule-k="text"]').forEach((ta) => {
+      ta.addEventListener('input', (e) => {
+        const i = +e.target.dataset.ruleIdx;
+        botRules[i].text = e.target.value;
+        botRules[i].updatedAt = new Date().toISOString();
+      });
+    });
+    host.querySelectorAll('[data-rule-action="del"]').forEach((b) => {
+      b.addEventListener('click', () => {
+        botRules.splice(+b.dataset.ruleIdx, 1);
+        renderRules();
+      });
+    });
+  }
+
+  $('#cb_addRule')?.addEventListener('click', () => {
+    botRules.push({
+      id: 'r' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+      text: '',
+      source: 'pm',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+    renderRules();
+  });
+
+  $('#cb_rulesClear')?.addEventListener('click', () => {
+    if (!confirm('모든 행동 지침을 삭제하시겠어요? AI가 추가한 규칙도 함께 삭제됩니다.')) return;
+    botRules = [];
+    renderRules();
+  });
+
+  $('#cb_rulesSave')?.addEventListener('click', () => {
+    const cleaned = botRules.filter((r) => r.text && r.text.trim());
+    const existing = store.chatConfig.get();
+    store.chatConfig.set({
+      ...existing,
+      botRules: cleaned,
+      // legacy systemPromptExtra도 동기화 (구버전 클라이언트 호환)
+      systemPromptExtra: cleaned.map((r) => `- ${r.text.trim()}`).join('\n'),
+    });
+    botRules = cleaned;
+    renderRules();
+    toast(`행동 지침 ${cleaned.length}개가 저장되었습니다. 다음 사용자 응답부터 적용됩니다.`, 'success');
+  });
+
+  renderRules();
+
+  // 30초 polling으로 다른 기기/AI 도구가 변경한 botRules를 자동 반영
+  const ruleSyncHandler = (e) => {
+    if (e.detail?.key?.endsWith('.chatConfig')) {
+      const latest = store.chatConfig.get();
+      botRules = Array.isArray(latest.botRules) ? [...latest.botRules] : migrateLegacyRules();
+      renderRules();
+    }
+  };
+  window.addEventListener('store:change', ruleSyncHandler);
+  // cleanup은 admin-views가 보통 unmount할 때 처리하지만 명시적 cleanup hook이 없으므로 기록만
 
   function renderIntents() {
     $('#cb_intents').innerHTML = intents.map((it, idx) => `
@@ -1681,10 +1809,11 @@ export function mountChatbot() {
   renderIntents();
 
   $('#cb_save').addEventListener('click', () => {
+    const existing = store.chatConfig.get();
     store.chatConfig.set({
+      ...existing, // botRules / systemPromptExtra 보존 (행동 지침은 cb_rulesSave에서 별도 저장)
       greeting: $('#cb_greeting').value.trim(),
       fallback: $('#cb_fallback').value.trim(),
-      systemPromptExtra: $('#cb_systemExtra')?.value || '',
       intents,
     });
     toast('챗봇 설정이 저장되었습니다', 'success');
