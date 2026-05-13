@@ -36,6 +36,7 @@ const PRICING = {
   },
 };
 
+// build-bust: tier-system-v1
 const COMPLEX_KEYWORDS = [
   '신청', '등록해', '작성해', '만들어', '추가해',
   '분석', '요약', '초안', '견적서', '제안서',
