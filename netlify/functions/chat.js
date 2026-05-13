@@ -288,6 +288,8 @@ async function callGemini({ model, contents, systemInstruction, tools, maxOutput
         topK: 40,
         topP: 0.95,
         maxOutputTokens,
+        // Gemini 2.5 Flash thinking 모드를 끔 — 견적/일반 답변에서 reasoning 토큰이 maxOutputTokens를 잡아먹는 문제 방지
+        thinkingConfig: { thinkingBudget: 0 },
         ...(tools ? {} : { responseMimeType: 'text/plain' }),
       },
       safetySettings: [
