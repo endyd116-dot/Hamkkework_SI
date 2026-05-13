@@ -3,7 +3,7 @@
  * Each view exports a render function that returns the HTML and an optional `mount` hook.
  */
 
-import { store, utils, ensureSeed, DEFAULT_QUALITY_TIERS } from './store.js';
+import { store, utils, ensureSeed, DEFAULT_QUALITY_TIERS, hashPassword, verifyPassword } from './store.js';
 import { $, $$, escapeHtml, fmt, toast, openDrawer, closeDrawer, downloadJson, downloadCsv, emptyState, md } from './admin-ui.js';
 
 await ensureSeed();
@@ -2645,7 +2645,38 @@ function renderTierEditor(tiers, activeId) {
 export function renderSettings() {
   const s = store.settings.get();
   const p = store.pricing.get();
+  const cred = store.adminCredentials.get() || {};
   return `
+    <div class="adm-card" style="border-left:4px solid var(--cobalt)">
+      <h3>🔑 내 계정 (어드민)</h3>
+      <div class="desc">
+        어드민 로그인에 사용되는 계정 정보입니다. 비밀번호는 SHA-256 + 솔트로 해시되어 저장됩니다.<br>
+        <b style="color:#dc2626">⚠️ 이메일·비밀번호 변경 후엔 자동 로그아웃되니 새 정보로 다시 로그인하세요.</b>
+      </div>
+      <div class="adm-row">
+        <div class="adm-field"><label>이메일 (로그인 ID)</label><input id="ac_email" type="email" value="${escapeHtml(cred.email||'')}"></div>
+        <div class="adm-field"><label>이름</label><input id="ac_name" value="${escapeHtml(cred.name||'')}"></div>
+      </div>
+      <div class="adm-row">
+        <div class="adm-field"><label>휴대폰</label><input id="ac_phone" value="${escapeHtml(cred.phone||'')}"></div>
+        <div class="adm-field"><label>역할 (예: 대표 PM)</label><input id="ac_role" value="${escapeHtml(cred.role||'')}"></div>
+      </div>
+      <button class="adm-btn" id="ac_saveProfile">프로필 저장 (비밀번호 변경 X)</button>
+
+      <h4 style="margin-top:24px;font-size:14px;color:var(--ink-deep,#1a1a1a)">비밀번호 변경</h4>
+      <div class="desc">현재 비밀번호 확인 후 새 비밀번호로 변경됩니다.</div>
+      <div class="adm-row">
+        <div class="adm-field"><label>현재 비밀번호</label><input id="ac_pwdNow" type="password" autocomplete="current-password"></div>
+        <div class="adm-field"><label>새 비밀번호 (8자+)</label><input id="ac_pwdNew" type="password" autocomplete="new-password"></div>
+        <div class="adm-field"><label>새 비밀번호 확인</label><input id="ac_pwdNew2" type="password" autocomplete="new-password"></div>
+      </div>
+      <button class="adm-btn" id="ac_savePwd">비밀번호 변경</button>
+      <div style="margin-top:12px;font-size:11px;color:var(--steel);line-height:1.6">
+        ※ 데모급 인증입니다. 실서비스 전엔 Netlify Identity / Supabase Auth / Auth0 등 별도 인증 서비스를 권장합니다.<br>
+        ※ 비밀번호 분실 시 다른 기기·브라우저에서 어드민 계정을 직접 편집해 복구하거나 PC의 localStorage를 초기화하세요.
+      </div>
+    </div>
+
     <div class="adm-card">
       <h3>브랜드 / 회사 정보</h3>
       <div class="adm-row">
@@ -2714,6 +2745,63 @@ export function renderSettings() {
   `;
 }
 export function mountSettings() {
+  // ─── 어드민 계정 — 프로필 (비밀번호 제외) ───
+  $('#ac_saveProfile')?.addEventListener('click', () => {
+    const cred = store.adminCredentials.get() || {};
+    const email = $('#ac_email').value.trim();
+    const name = $('#ac_name').value.trim();
+    const phone = $('#ac_phone').value.trim();
+    const role = $('#ac_role').value.trim();
+    if (!email || !/.+@.+\..+/.test(email)) { toast('유효한 이메일을 입력해 주세요', 'error'); return; }
+    if (!name) { toast('이름을 입력해 주세요', 'error'); return; }
+    const emailChanged = email.toLowerCase() !== (cred.email || '').toLowerCase();
+    store.adminCredentials.set({
+      ...cred,
+      email, name, phone, role,
+      updatedAt: utils.nowIso(),
+    });
+    // 현재 로그인 세션도 즉시 동기화 (이메일은 다음 로그인 때 검증되니 세션은 옛 이메일도 OK)
+    const auth = store.auth.get();
+    if (auth) store.auth.set({ ...auth, email, name, role });
+    if (emailChanged) {
+      toast('이메일이 변경되었습니다. 다시 로그인해 주세요.', 'success');
+      setTimeout(() => { store.auth.clear(); location.reload(); }, 1500);
+    } else {
+      toast('프로필이 저장되었습니다', 'success');
+      // 헤더 표시 즉시 갱신
+      const userName = document.getElementById('userName');
+      const userEmail = document.getElementById('userEmail');
+      const userAvatar = document.getElementById('userAvatar');
+      if (userName) userName.textContent = name;
+      if (userEmail) userEmail.textContent = email;
+      if (userAvatar) userAvatar.textContent = (name || email).charAt(0).toUpperCase();
+    }
+  });
+
+  // ─── 어드민 계정 — 비밀번호 변경 ───
+  $('#ac_savePwd')?.addEventListener('click', async () => {
+    const cred = store.adminCredentials.get();
+    if (!cred?.passwordHash || !cred?.salt) { toast('계정 정보가 손상되었습니다. 페이지 새로고침 후 다시 시도하세요.', 'error'); return; }
+    const pwdNow = $('#ac_pwdNow').value;
+    const pwdNew = $('#ac_pwdNew').value;
+    const pwdNew2 = $('#ac_pwdNew2').value;
+    if (!pwdNow || !pwdNew || !pwdNew2) { toast('모든 비밀번호 필드를 입력해 주세요', 'error'); return; }
+    if (pwdNew.length < 8) { toast('새 비밀번호는 8자 이상이어야 합니다', 'error'); return; }
+    if (pwdNew !== pwdNew2) { toast('새 비밀번호 확인이 일치하지 않습니다', 'error'); return; }
+    if (pwdNew === pwdNow) { toast('새 비밀번호가 현재 비밀번호와 동일합니다', 'error'); return; }
+    const valid = await verifyPassword(pwdNow, cred.passwordHash, cred.salt);
+    if (!valid) { toast('현재 비밀번호가 일치하지 않습니다', 'error'); return; }
+    const { hash, salt } = await hashPassword(pwdNew);
+    store.adminCredentials.set({
+      ...cred,
+      passwordHash: hash,
+      salt,
+      updatedAt: utils.nowIso(),
+    });
+    toast('비밀번호가 변경되었습니다. 다시 로그인해 주세요.', 'success');
+    setTimeout(() => { store.auth.clear(); location.reload(); }, 1500);
+  });
+
   $('#st_save')?.addEventListener('click', () => {
     store.settings.set({
       brand: $('#st_brand').value.trim(),

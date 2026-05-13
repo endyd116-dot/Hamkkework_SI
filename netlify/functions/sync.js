@@ -14,6 +14,7 @@ const ALLOWED_KEYS = new Set([
   'cases', 'faqs', 'posts', 'leads', 'quotes', 'projects',
   'invoices', 'clients', 'automations', 'chatLogs', 'chatConfig',
   'settings', 'pricing', 'scheduledTasks', 'usageLog', 'frozenResponses',
+  'adminCredentials', // 어드민 계정 (이메일, 이름, 휴대폰, role, passwordHash, salt)
 ]);
 
 const STORE_NAME = 'hamkkework';

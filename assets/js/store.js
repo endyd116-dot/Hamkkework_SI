@@ -93,9 +93,38 @@ const KEYS = {
   scheduledTasks: `${NS}.scheduledTasks`,
   usageLog: `${NS}.usageLog`,
   frozenResponses: `${NS}.frozenResponses`,  // #4 Top-N 사전 응답 캐시
+  adminCredentials: `${NS}.adminCredentials`, // 어드민 계정 (email, name, phone, role, passwordHash, salt)
   auth: `${NS}.auth`,
   theme: `${NS}.theme`,
 };
+
+/* ============================================================
+   비밀번호 해싱 — SHA-256 + per-account salt (Web Crypto API)
+   ============================================================ */
+async function sha256Hex(str) {
+  const buf = new TextEncoder().encode(str);
+  const hash = await crypto.subtle.digest('SHA-256', buf);
+  return Array.from(new Uint8Array(hash)).map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+export async function hashPassword(plain, salt) {
+  if (!plain) return '';
+  const realSalt = salt || randomSalt();
+  const hash = await sha256Hex(`${realSalt}::${plain}`);
+  return { hash, salt: realSalt };
+}
+
+export async function verifyPassword(plain, hash, salt) {
+  if (!plain || !hash || !salt) return false;
+  const computed = await sha256Hex(`${salt}::${plain}`);
+  return computed === hash;
+}
+
+function randomSalt() {
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes).map((b) => b.toString(16).padStart(2, '0')).join('');
+}
 
 const read = (k, fb = null) => {
   try {
@@ -135,6 +164,7 @@ const SYNCED_KEYS = [
   'cases', 'faqs', 'posts', 'leads', 'quotes', 'projects',
   'invoices', 'clients', 'automations', 'chatLogs', 'chatConfig',
   'settings', 'pricing', 'scheduledTasks', 'usageLog', 'frozenResponses',
+  'adminCredentials',
 ];
 const SYNC_DEBOUNCE_MS = 800;
 const SYNC_POLL_MS = 30_000;
@@ -244,6 +274,20 @@ export async function syncNow() {
    Seed loader — runs once
    ============================================================ */
 export async function ensureSeed() {
+  // 🔑 마이그레이션 — adminCredentials는 meta.v 가드보다 먼저 체크 (기존 사용자도 시드되도록)
+  if (!read(KEYS.adminCredentials)) {
+    const { hash, salt } = await hashPassword('hamkke2026');
+    write(KEYS.adminCredentials, {
+      email: 'endyd116@gmail.com',
+      name: '박두용',
+      phone: '010-2807-5242',
+      role: '대표 PM',
+      passwordHash: hash,
+      salt,
+      updatedAt: nowIso(),
+    });
+  }
+
   const meta = read(KEYS.meta);
   if (meta && meta.v >= VERSION && read(KEYS.cases)?.length) return;
 
@@ -300,6 +344,8 @@ export async function ensureSeed() {
         { id: uid('a'), trigger: 'project.weekly', name: '주간 진행보고 자동 발송', enabled: true, template: '{{client}}님, 이번 주 진행 상황을 공유드립니다.' },
       ]);
     }
+
+    // adminCredentials 시드는 ensureSeed 최상단에서 처리 (meta.v 가드 전)
 
     write(KEYS.meta, { v: VERSION, seededAt: nowIso() });
   } catch (e) {
@@ -369,6 +415,10 @@ export const store = {
     get: () => read(KEYS.auth, null),
     set: (v) => write(KEYS.auth, v),
     clear: () => localStorage.removeItem(KEYS.auth),
+  },
+  adminCredentials: {
+    get: () => read(KEYS.adminCredentials, null),
+    set: (v) => write(KEYS.adminCredentials, v),
   },
   theme: {
     get: () => read(KEYS.theme, 'light'),

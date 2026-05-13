@@ -2,17 +2,17 @@
  * Admin app shell — auth gate, sidebar router, view loader.
  */
 
-import { store, ensureSeed } from './store.js';
+import { store, ensureSeed, verifyPassword } from './store.js';
 import { $, $$, toast, escapeHtml } from './admin-ui.js';
 import * as Views from './admin-views.js';
 
 await ensureSeed();
 
 /* ============================================================
-   Auth (demo: hardcoded; replace with Netlify Identity / Supabase)
+   Auth — adminCredentials store에서 계정 읽어 SHA-256 hash 검증
+   - 시드 직후엔 DEMO_ACCOUNT (endyd116@gmail.com / hamkke2026)
+   - 어드민 페이지에서 비밀번호·이름·이메일 변경 가능
    ============================================================ */
-const DEMO_ACCOUNT = { email: 'endyd116@gmail.com', password: 'hamkke2026' };
-
 function isAuthed() {
   const a = store.auth.get();
   return !!a?.email;
@@ -33,18 +33,34 @@ function showAdmin() {
   }
 }
 
-$('#loginForm')?.addEventListener('submit', (e) => {
+$('#loginForm')?.addEventListener('submit', async (e) => {
   e.preventDefault();
   const email = $('#loginEmail').value.trim();
   const pwd = $('#loginPwd').value;
-  if (email === DEMO_ACCOUNT.email && pwd === DEMO_ACCOUNT.password) {
-    store.auth.set({ email, name: '박단용', at: new Date().toISOString() });
-    showAdmin();
-    navTo('dashboard');
-    toast('환영합니다, 박단용 님.', 'success');
-  } else {
-    toast('이메일 또는 비밀번호가 일치하지 않습니다', 'error');
+
+  const cred = store.adminCredentials.get();
+  if (!cred || !cred.passwordHash || !cred.salt) {
+    toast('어드민 계정이 초기화되지 않았습니다. 페이지를 새로고침해 주세요.', 'error');
+    return;
   }
+  if (email.toLowerCase() !== (cred.email || '').toLowerCase()) {
+    toast('이메일 또는 비밀번호가 일치하지 않습니다', 'error');
+    return;
+  }
+  const valid = await verifyPassword(pwd, cred.passwordHash, cred.salt);
+  if (!valid) {
+    toast('이메일 또는 비밀번호가 일치하지 않습니다', 'error');
+    return;
+  }
+  store.auth.set({
+    email: cred.email,
+    name: cred.name || '관리자',
+    role: cred.role || '',
+    at: new Date().toISOString(),
+  });
+  showAdmin();
+  navTo('dashboard');
+  toast(`환영합니다, ${cred.name || '관리자'}님.`, 'success');
 });
 
 $('#logoutBtn')?.addEventListener('click', () => {
