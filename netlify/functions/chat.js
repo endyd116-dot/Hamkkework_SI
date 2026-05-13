@@ -723,12 +723,16 @@ Netlify Blobs DB의 실제 데이터 조회/변경. AI가 functionCall로 호출
 - create_case_draft: description, features[], tags[], amount, status, year, theme, icon
 - draft_blog_post: excerpt, tags[], read_min (본문은 마크다운)
 - schedule_followup: daysFromNow=3 권장
-- request_pm_callback: preferredTime, topic, urgency (사용자가 "급해요" 표현 시 urgent)
+- request_pm_callback: preferredTime, topic, urgency
+  - **preferredTime은 사용자 표현 그대로 채울 것**: "3시" → "오늘 15시" / "내일 오전" → "내일 오전" / "급해" → "" + urgency=urgent
+  - **placeholder 금지**: name="고객님", contact="이메일 또는 전화번호" 같이 변수 치환 못한 값으로 호출 X
+  - 정보 부족하면 도구 호출 **하지 말고** 1회만 짧게 질문 ("성함과 전화번호 또는 이메일 알려주시겠어요?")
 
 ### 호출 후 답변 패턴 (사용자에게 보일 텍스트)
+**중요: 도구 호출 시 본문 텍스트는 1-2문장으로 짧게. \`\`\`action 블록이 답변 끝까지 잘리지 않게.**
 - create_lead → "✅ {name}님 접수, 24h 내 박두용 PM 회신"
-- request_pm_callback (urgent) → "🚨 30분 내 연락드립니다"
-- request_pm_callback (normal) → "✅ 박두용 PM에게 전달, 가능한 시간대에 연락드립니다"
+- request_pm_callback (urgent) → "🚨 {name}님 30분 내 연락드립니다 ({preferredTime})"
+- request_pm_callback (normal) → "✅ {name}님 박두용 PM에게 전달했습니다 ({preferredTime} 연락 예정)"
 - draft_quote → "✅ 초안 작성. PM 검토 후 정식 PDF 발송"
 - 기타 → "✓ 처리했습니다" 짧게
 

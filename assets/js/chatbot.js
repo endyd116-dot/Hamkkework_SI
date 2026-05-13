@@ -620,6 +620,23 @@ async function executeAction(action) {
       if (!data.name || !data.contact || !data.method) {
         return { ok: false, message: '이름·연락처·방법(phone/email/kakao)이 필요합니다' };
       }
+      // 🛡 placeholder 거절 — AI가 정보 없이 "고객님", "이메일 또는 전화번호" 같은 텍스트로 호출하는 케이스
+      const placeholderPatterns = [
+        /^고객님?$/i, /^이름$/i, /^이메일/i, /^전화번호/i, /^연락처/i,
+        /이메일.*또는.*전화/, /전화.*또는.*이메일/,
+        /^placeholder/i, /^example/i, /TBD/i,
+      ];
+      const isPlaceholder = (s) => placeholderPatterns.some((re) => re.test(String(s).trim()));
+      if (isPlaceholder(data.name) || isPlaceholder(data.contact)) {
+        return { ok: false, message: '실제 이름과 연락처가 필요해요. 다시 말씀해 주시겠어요?' };
+      }
+      // 연락처 형식 검증 (전화면 숫자 7자리+, 이메일이면 @ 필수)
+      const contactStr = String(data.contact).trim();
+      const hasDigits = (contactStr.match(/\d/g) || []).length;
+      const isEmail = /@/.test(contactStr);
+      if (!isEmail && hasDigits < 7) {
+        return { ok: false, message: '연락처를 다시 확인해 주세요. 전화번호(010-1234-5678)나 이메일이 필요해요.' };
+      }
       const methodKr = { phone: '📞 전화', email: '📨 이메일', kakao: '💬 카카오톡' }[data.method] || data.method;
       const urgent = data.urgency === 'urgent';
       const t = store.scheduledTasks.add({

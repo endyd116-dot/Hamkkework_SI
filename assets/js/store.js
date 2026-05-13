@@ -269,9 +269,18 @@ export async function ensureSeed() {
       write(KEYS.chatConfig, {
         greeting: '안녕하세요! 함께워크_SI AI 상담입니다. 가격·레퍼런스·AI 도입 등 무엇이든 물어보세요.',
         intents: seed.chat_intents || [],
-        fallback: 'Gemini 응답을 받지 못했네요. 30분 무료 상담을 통해 직접 답변드릴게요. 페이지 하단의 [상담 요청]을 이용해 주세요.',
+        fallback: 'AI 응답이 잠시 어려운 상태예요. 잠시 후 다시 질문해주시거나, 페이지 하단 [상담 요청]을 남겨주시면 박두용 PM이 직접 연락드립니다.',
         systemPromptExtra: '',
       });
+    } else {
+      // 마이그레이션: 옛 fallback 텍스트 사용 중이면 친화 텍스트로 교체 (한 번만)
+      const cfg = read(KEYS.chatConfig);
+      if (cfg && /Gemini 응답을 받지 못했네요/.test(cfg.fallback || '')) {
+        write(KEYS.chatConfig, {
+          ...cfg,
+          fallback: 'AI 응답이 잠시 어려운 상태예요. 잠시 후 다시 질문해주시거나, 페이지 하단 [상담 요청]을 남겨주시면 박두용 PM이 직접 연락드립니다.',
+        });
+      }
     }
     if (!read(KEYS.settings)) {
       write(KEYS.settings, {
