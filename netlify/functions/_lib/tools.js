@@ -40,6 +40,9 @@ const READ_ONLY_TOOLS = new Set([
   'faqs_find',
   'quotes_list',
   'analyze_chat_patterns', // 분석은 read-only, 5분 캐시 OK
+  'daily_briefing',        // 일간 요약 read-only
+  'revenue_forecast',      // 매출 예측 read-only
+  'frozen_response_suggest', // Frozen 후보 분석 read-only
   // update_bot_instruction은 mutation이라 캐시 안 함, get은 매번 최신값 받게 캐시 제외
 ]);
 
@@ -687,6 +690,318 @@ export const TOOL_CATALOG = {
           : draft.status === 'failed'
             ? `발송 실패: ${draft.error?.slice(0, 100)}`
             : '드래프트로 저장됨'),
+      };
+    },
+  },
+
+  // ─────────────────────────────────────────────────────────
+  // Frozen Response 제안 + 채택 (Q&A 자동 캐싱으로 AI 비용 절감)
+  // ─────────────────────────────────────────────────────────
+  frozen_response_suggest: {
+    adminOnly: true,
+    declaration: {
+      name: 'frozen_response_suggest',
+      description: 'Suggest frozen response candidates from chat history — frequently asked questions that could be cached for cost savings. Use when admin asks "자주 묻는 질문 캐싱", "AI 비용 줄여줘", "frozen 후보 찾아줘".',
+      parameters: {
+        type: 'object',
+        properties: {
+          since: { type: 'string', description: '7d|30d|90d (default 30d)' },
+          min_count: { type: 'number', description: '최소 반복 횟수 (default 3)' },
+        },
+      },
+    },
+    async handler({ since, min_count }) {
+      const days = parseSince(since) || 30;
+      const minCount = Math.max(2, Number(min_count) || 3);
+
+      const [logs, frozen] = await Promise.all([
+        readCollection('chatLogs'),
+        readCollection('frozenResponses'),
+      ]);
+
+      const existingFrozenKeywords = new Set();
+      for (const f of frozen) {
+        for (const k of (f.keywords || [])) existingFrozenKeywords.add(String(k).toLowerCase());
+      }
+
+      // 최근 N일 사용자 질문 + 그 직후 봇 답변
+      const recent = logs.filter((l) => withinDays(l.updatedAt, days));
+      const pairs = [];
+      for (const log of recent) {
+        const msgs = log.messages || [];
+        for (let i = 0; i < msgs.length - 1; i++) {
+          if (msgs[i].role !== 'user' || !msgs[i].text) continue;
+          const next = msgs[i + 1];
+          if (next?.role === 'bot' && next.text) {
+            pairs.push({ q: msgs[i].text.trim(), a: next.text.trim() });
+          }
+        }
+      }
+
+      // 질문 정규화 (조사·문장부호 제거, 짧은 키워드만)
+      const normalize = (s) => s
+        .toLowerCase()
+        .replace(/[?!.,~"'`]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+      const STOPWORDS = new Set(['있어', '있나요', '뭐예요', '인가요', '입니까', '있나', '되나요', '뭐가']);
+
+      // 질문 패턴 빈도 — 정규화된 첫 6단어
+      const patternCounts = new Map();
+      for (const p of pairs) {
+        const norm = normalize(p.q);
+        const words = norm.split(' ').filter((w) => w.length >= 2 && !STOPWORDS.has(w));
+        if (words.length < 1) continue;
+        const key = words.slice(0, 6).join(' ');
+        if (key.length < 5) continue;
+        if (!patternCounts.has(key)) patternCounts.set(key, { count: 0, samples: [] });
+        const entry = patternCounts.get(key);
+        entry.count++;
+        if (entry.samples.length < 3) entry.samples.push({ q: p.q, a: p.a.slice(0, 200) });
+      }
+
+      // minCount 이상 + 기존 frozen에 없는 것
+      const candidates = [...patternCounts.entries()]
+        .filter(([key, v]) => v.count >= minCount)
+        .filter(([key]) => {
+          const firstWord = key.split(' ')[0];
+          return !existingFrozenKeywords.has(firstWord);
+        })
+        .sort((a, b) => b[1].count - a[1].count)
+        .slice(0, 8)
+        .map(([key, v]) => ({
+          pattern_key: key,
+          frequency: v.count,
+          sample_question: v.samples[0]?.q,
+          sample_answer_excerpt: v.samples[0]?.a,
+          suggested_keywords: key.split(' ').slice(0, 4),
+        }));
+
+      return {
+        period_days: days,
+        total_pairs_analyzed: pairs.length,
+        existing_frozen: frozen.length,
+        candidates,
+        cost_saving_hint: candidates.length > 0
+          ? `${candidates.reduce((s, c) => s + c.frequency, 0)}회 호출 절감 가능 (대략 $${(candidates.reduce((s, c) => s + c.frequency, 0) * 0.0003).toFixed(3)} / 이 기간 기준)`
+          : '신규 후보 없음',
+        hint: 'AI가 후보들을 정리해 PM에게 제시 + PM 동의 시 frozen_response_create로 채택. 자동 채택 금지.',
+      };
+    },
+  },
+
+  frozen_response_create: {
+    adminOnly: true,
+    declaration: {
+      name: 'frozen_response_create',
+      description: 'Create a frozen response from a suggested pattern. Call ONLY after admin explicit consent.',
+      parameters: {
+        type: 'object',
+        required: ['keywords', 'answer'],
+        properties: {
+          keywords: { type: 'array', description: '매칭할 키워드 배열 (소문자, 부분 일치)', items: { type: 'string' } },
+          answer: { type: 'string', description: '캐싱할 답변 (한국어, 자연스럽게)' },
+          label: { type: 'string', description: '관리용 라벨 (예: "환불 정책 설명")' },
+        },
+      },
+    },
+    async handler({ keywords, answer, label }) {
+      if (!Array.isArray(keywords) || keywords.length === 0) return { error: 'keywords_required' };
+      if (!answer || !answer.trim()) return { error: 'answer_required' };
+
+      const frozen = await readCollection('frozenResponses');
+      const newFr = {
+        id: 'fr_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+        label: label || keywords.slice(0, 2).join(' '),
+        keywords: keywords.map((k) => String(k).toLowerCase().trim()).filter(Boolean),
+        answer: answer.trim(),
+        createdAt: new Date().toISOString(),
+        createdBy: 'ai-suggest',
+        hits: 0,
+      };
+      frozen.unshift(newFr);
+      await writeCollection('frozenResponses', frozen);
+      return {
+        ok: true,
+        id: newFr.id,
+        keywords: newFr.keywords,
+        note: '다음 사용자 질문부터 매칭 시 AI 호출 없이 즉시 답변 (비용 절감).',
+      };
+    },
+  },
+
+  // ─────────────────────────────────────────────────────────
+  // 매출 예측 (revenue_forecast)
+  // 파이프라인 단계별 전환율 + 평균 견적가로 예상 매출 산출
+  // ─────────────────────────────────────────────────────────
+  revenue_forecast: {
+    adminOnly: true,
+    declaration: {
+      name: 'revenue_forecast',
+      description: 'Forecast revenue from current pipeline. Analyzes lead stages, conversion rates, and quote averages. Use when admin asks "예상 매출" / "파이프라인 분석" / "이번달 매출 예측" / "수주 예상".',
+      parameters: {
+        type: 'object',
+        properties: {
+          horizon: { type: 'string', description: 'month | quarter (default: month)' },
+        },
+      },
+    },
+    async handler({ horizon }) {
+      const h = (horizon || 'month').toLowerCase();
+      const [leads, quotes] = await Promise.all([
+        readCollection('leads'),
+        readCollection('quotes'),
+      ]);
+
+      // 단계 카운트
+      const stages = ['new', 'consult', 'quote', 'contract', 'won', 'lost'];
+      const counts = {};
+      for (const s of stages) counts[s] = leads.filter((l) => l.status === s).length;
+
+      // 전환율 — 단순 (현재 단계 수 / 이전 단계 + 현재 단계)
+      // 더 정확하려면 history 추적 필요. 일단 간단한 누적 비율.
+      const won = counts.won || 0;
+      const lost = counts.lost || 0;
+      const total = leads.length;
+      const closed = won + lost;
+      const winRate = closed > 0 ? won / closed : 0;
+
+      // 평균 수주 금액 (won + 견적 있는 리드)
+      const wonLeads = leads.filter((l) => l.status === 'won');
+      const validAmounts = [];
+      for (const q of quotes) {
+        if (Number(q.total) > 0) validAmounts.push(Number(q.total));
+      }
+      // 견적이 없으면 budget 문자열 추정 (대략)
+      if (validAmounts.length === 0) {
+        const BUDGET_MID = { '~1천만': 700, '1천~3천': 2000, '3천~1억': 6500, '1억~5억': 30000, '5억+': 70000 };
+        for (const l of leads) {
+          const mid = BUDGET_MID[l.budget];
+          if (mid) validAmounts.push(mid);
+        }
+      }
+      const avgQuote = validAmounts.length > 0
+        ? validAmounts.reduce((s, n) => s + n, 0) / validAmounts.length
+        : 0;
+
+      // 파이프라인 단계별 예상 수주 (단계가 뒤로 갈수록 win 확률 높음)
+      // 단순 가중치: new=0.1, consult=0.25, quote=0.5, contract=0.85
+      const stageWinProb = { new: 0.1, consult: 0.25, quote: 0.5, contract: 0.85 };
+      let pipelineExpected = 0;
+      const pipelineBreakdown = {};
+      for (const stage of ['new', 'consult', 'quote', 'contract']) {
+        const n = counts[stage] || 0;
+        const expected = n * (stageWinProb[stage] || 0) * avgQuote;
+        pipelineExpected += expected;
+        pipelineBreakdown[stage] = {
+          leads: n,
+          win_prob: stageWinProb[stage],
+          expected_revenue_manwon: Math.round(expected),
+        };
+      }
+
+      // 신뢰 구간 (±20%)
+      const lo = Math.round(pipelineExpected * 0.8);
+      const hi = Math.round(pipelineExpected * 1.2);
+
+      return {
+        horizon: h,
+        pipeline_counts: counts,
+        total_leads: total,
+        closed_leads: closed,
+        win_rate_pct: Math.round(winRate * 100),
+        avg_quote_manwon: Math.round(avgQuote),
+        avg_quote_source: validAmounts.length > 0 && quotes.length > 0 ? 'quotes' : 'budget_estimate',
+        pipeline_breakdown: pipelineBreakdown,
+        expected_revenue_manwon: Math.round(pipelineExpected),
+        expected_range: { low: lo, high: hi },
+        note: validAmounts.length === 0
+          ? '견적 데이터 부족 — budget 필드 중간값으로 추정. 견적 등록 후 더 정확'
+          : `${validAmounts.length}개 견적/리드 평균 기반`,
+        hint: 'AI가 단계별 깔때기 + 예상 매출 + 가정·제약 자연어로 정리. 단순 숫자 나열 X',
+      };
+    },
+  },
+
+  // ─────────────────────────────────────────────────────────
+  // 일간 운영 요약 (daily_briefing)
+  // 운영자 모드 또는 cron이 호출 → 어제·오늘 핵심 지표 한눈에
+  // ─────────────────────────────────────────────────────────
+  daily_briefing: {
+    adminOnly: true,
+    declaration: {
+      name: 'daily_briefing',
+      description: 'Generate a daily operations briefing — yesterday/today metrics: new leads, callback requests, quotes sent, fallback rate, AI cost. Use when admin says "오늘 요약" / "일간 보고" / "어제 어땠어" / "운영 현황".',
+      parameters: {
+        type: 'object',
+        properties: {
+          date: { type: 'string', description: 'YYYY-MM-DD (default: today). 특정 날짜 요약' },
+        },
+      },
+    },
+    async handler({ date }) {
+      const target = date ? new Date(date) : new Date();
+      target.setHours(0, 0, 0, 0);
+      const targetEnd = new Date(target); targetEnd.setHours(23, 59, 59, 999);
+      const yesterday = new Date(target); yesterday.setDate(yesterday.getDate() - 1);
+      const yesterdayEnd = new Date(yesterday); yesterdayEnd.setHours(23, 59, 59, 999);
+
+      const inRange = (iso, start, end) => {
+        if (!iso) return false;
+        const t = new Date(iso).getTime();
+        return t >= start.getTime() && t <= end.getTime();
+      };
+
+      const [leads, tasks, logs, quotes, usage] = await Promise.all([
+        readCollection('leads'),
+        readCollection('scheduledTasks'),
+        readCollection('chatLogs'),
+        readCollection('quotes'),
+        readCollection('usageLog'),
+      ]);
+
+      // 오늘
+      const todayNewLeads = leads.filter((l) => inRange(l.createdAt, target, targetEnd)).length;
+      const todayCallbacks = tasks.filter((t) => t.type === 'callback_request' && inRange(t.createdAt || t.scheduledAt, target, targetEnd));
+      const todayCallbacksUrgent = todayCallbacks.filter((t) => t.urgency === 'urgent').length;
+      const todayChats = logs.filter((l) => inRange(l.updatedAt, target, targetEnd)).length;
+      const todayQuotes = quotes.filter((q) => inRange(q.createdAt, target, targetEnd)).length;
+      const todayCost = usage.filter((u) => inRange(u.createdAt, target, targetEnd))
+        .reduce((s, u) => s + (u.cost_usd || 0), 0);
+
+      // 어제 대비
+      const yLeads = leads.filter((l) => inRange(l.createdAt, yesterday, yesterdayEnd)).length;
+      const yChats = logs.filter((l) => inRange(l.updatedAt, yesterday, yesterdayEnd)).length;
+      const yCost = usage.filter((u) => inRange(u.createdAt, yesterday, yesterdayEnd))
+        .reduce((s, u) => s + (u.cost_usd || 0), 0);
+
+      // 처리 대기 (누적)
+      const pendingCallbacks = tasks.filter((t) => t.type === 'callback_request' && t.status === 'pending').length;
+      const pendingFollowups = tasks.filter((t) => t.type === 'followup_email' && t.status === 'pending').length;
+
+      const dateStr = target.toISOString().slice(0, 10);
+      const delta = (cur, prev) => prev === 0 ? (cur > 0 ? '+' + cur : '0') : `${cur > prev ? '+' : ''}${Math.round(((cur - prev) / prev) * 100)}%`;
+
+      return {
+        date: dateStr,
+        today: {
+          new_leads: todayNewLeads,
+          callbacks_requested: todayCallbacks.length,
+          callbacks_urgent: todayCallbacksUrgent,
+          chats: todayChats,
+          quotes_created: todayQuotes,
+          ai_cost_usd: Number(todayCost.toFixed(5)),
+        },
+        delta_vs_yesterday: {
+          leads: delta(todayNewLeads, yLeads),
+          chats: delta(todayChats, yChats),
+          cost: delta(todayCost, yCost),
+        },
+        pending: {
+          callbacks: pendingCallbacks,
+          followups: pendingFollowups,
+        },
+        hint: 'AI가 결과를 사람 친화적 한국어 요약 + 시급한 처리 사항(긴급 콜백 등) 강조해 답변',
       };
     },
   },

@@ -1,0 +1,39 @@
+name: Auto Follow-up (24h 미응답 콜백 자동 메일)
+
+# 매시간 정각에 /api/auto-followup 호출
+# - 24h 이상 처리 안 된 콜백 요청 검색
+# - RESEND_API_KEY 있으면 자동 메일 발송, 없으면 emailDrafts에 저장
+# - 한 번에 최대 5건 발송 (스팸 방지)
+
+on:
+  schedule:
+    - cron: '15 * * * *'  # 매시간 15분 (다른 cron과 분산)
+  workflow_dispatch:
+
+concurrency:
+  group: auto-followup
+  cancel-in-progress: true
+
+jobs:
+  followup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Trigger auto-followup
+        run: |
+          set -e
+          URL="${BASE_URL:-https://hamkkework-si.netlify.app}/api/auto-followup"
+          if [ -n "$CRON_SECRET" ]; then
+            URL="$URL?secret=$CRON_SECRET"
+          fi
+          echo "Calling $URL"
+          HTTP_CODE=$(curl -s -o /tmp/body.json -w "%{http_code}" "$URL" --max-time 60)
+          echo "HTTP $HTTP_CODE"
+          cat /tmp/body.json
+          if [ "$HTTP_CODE" -ge 400 ]; then
+            echo "::error::auto-followup failed with HTTP $HTTP_CODE"
+            exit 1
+          fi
+        env:
+          BASE_URL: ${{ vars.BASE_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}

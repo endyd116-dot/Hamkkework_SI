@@ -787,6 +787,10 @@ Netlify Blobs DB의 실제 데이터 조회/변경. AI가 functionCall로 호출
 - "다음부터 ㅇㅇ해줘/고객한테 ㅇㅇ 받아라/지침 추가/규칙 변경" → update_bot_instruction (mode='append' 기본, "전체 교체" 명시 시 'replace_all')
 - "분석해줘/패턴 찾아줘/자주 묻는 질문/개선할 부분/챗봇 학습" → analyze_chat_patterns (since=7d|30d, min_count=2)
 - "메일 보내줘/이메일 발송/회신 보내줘/안내문 보내줘" → send_email (to/subject/body 필수, leadName/purpose 권장)
+- "오늘 요약/일간 보고/어제 어땠어/운영 현황/오늘 핵심" → daily_briefing (date 생략 시 오늘)
+- "예상 매출/파이프라인 분석/이번달 매출 예측/수주 예상" → revenue_forecast (horizon=month|quarter)
+- "자주 묻는 질문 캐싱/AI 비용 줄여줘/frozen 후보 찾아줘" → frozen_response_suggest (since=30d 기본)
+- "그 후보 추가해줘/frozen으로 저장해줘" → frozen_response_create (PM 동의 후 호출)
 
 ## 📧 이메일 발송 (send_email) 사용 가이드
 - 이메일 본문은 운영자가 별도 검수 없이 그대로 발송될 수 있으므로 **공손한 한국어 + 회사 시그니처** 포함:
