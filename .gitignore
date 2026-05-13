@@ -6,5 +6,10 @@ node_modules/
 .netlify/
 *.log
 
-# Local backups
+# Local backups (로컬에만 보관, 리포에 안 올림)
 *.backup.json
+*.original.jpg
+*.original.png
+
+# Claude Code 로컬 설정 (PC별 개인 설정 — 푸시 안 함)
+.claude/settings.json
