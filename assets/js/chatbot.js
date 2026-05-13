@@ -46,7 +46,15 @@ const LIMITS = {
   apiCallsPerMinute: 12,       // 분당 API 호출 최대
   monthlyBudgetUsd: 50,        // 월 비용 한도 (정보 표시용)
   historyToSend: 12,           // Gemini에 보낼 최근 메시지 수 (6 turn)
+  historyKeepRecent: 4,        // 압축 시 최근 N개는 원본 유지 (#2)
+  historyCompressFrom: 6,      // N+ 메시지 쌓이면 오래된 것 압축
+  sessionCostSoftUsd: 0.03,    // #5(a) 세션 누적 비용 경고 임계
+  sessionCostHardUsd: 0.05,    // #5(a) 세션 누적 비용 차단 임계
 };
+
+// 💰 #5(a) 세션 누적 비용 추적
+let sessionCostUsd = 0;
+let sessionCostWarned = false;
 
 // 💰 비용 절감: 단순 인사/감사는 Gemini 호출 없이 즉시 응답
 const SHORT_FALLBACKS = {
@@ -76,6 +84,30 @@ const SHORT_FALLBACKS = {
   'no': '알겠습니다. 다른 질문 있으시면 편하게 물어보세요.',
   'ㄴㄴ': '알겠습니다. 다른 질문 있으시면 편하게 물어보세요.',
 };
+
+/**
+ * 💰 #4 Frozen Response — 사전 정의된 응답에 키워드 매칭 시 Gemini 호출 0
+ * 어드민 [지식 베이스]에서 PM이 작성한 응답을 매칭 → 즉시 응답
+ */
+function tryFrozenResponse(q) {
+  const frozen = store.frozenResponses.all();
+  if (!frozen.length) return null;
+  const text = q.toLowerCase();
+  for (const fr of frozen) {
+    if (fr.disabled) continue;
+    const kws = (fr.keywords || []).map((k) => (k || '').toLowerCase().trim()).filter(Boolean);
+    if (!kws.length) continue;
+    const mode = fr.matchMode || 'all';  // all = AND, any = OR
+    const hits = kws.filter((k) => text.includes(k));
+    const matched = mode === 'any' ? hits.length > 0 : hits.length === kws.length;
+    if (matched) {
+      // 히트 카운트 증가 (분석용)
+      store.frozenResponses.update(fr.id, { hits: (fr.hits || 0) + 1, lastHitAt: utils.nowIso() });
+      return fr.answer;
+    }
+  }
+  return null;
+}
 
 function tryShortFallback(q) {
   const normalized = q.trim().toLowerCase().replace(/[!?.,~^ ]/g, '');
@@ -785,6 +817,68 @@ function renderActionCard(card) {
 }
 
 /* ============================================================
+   💰 #2 대화 압축 — 6개 이상 메시지 쌓이면 오래된 것들 1줄로 요약
+   ============================================================ */
+const TOPIC_KEYWORDS = [
+  '견적', '가격', '비용', '단가', '예산',
+  '일정', '기간', '몇 주', '몇 개월',
+  '계약', '결제', '인보이스', '잔금',
+  'AI', '챗봇', 'RAG', '에이전트', '파인튜닝',
+  '쇼핑몰', '플랫폼', '관리자', '대시보드',
+  '레퍼런스', '케이스', '실적',
+  '상담', '미팅', '문의',
+];
+
+function extractTopics(msgs) {
+  const text = msgs.map((m) => m.text || '').join(' ').toLowerCase();
+  const found = TOPIC_KEYWORDS.filter((k) => text.toLowerCase().includes(k.toLowerCase()));
+  return found.slice(0, 5);
+}
+
+function compressHistory(messages) {
+  if (messages.length < LIMITS.historyCompressFrom) return messages;
+  const keep = LIMITS.historyKeepRecent;
+  if (messages.length <= keep) return messages;
+  const oldMsgs = messages.slice(0, messages.length - keep);
+  const recent = messages.slice(-keep);
+  const topics = extractTopics(oldMsgs);
+  const summary = {
+    role: 'user',
+    text: `[이전 대화 ${oldMsgs.length}개 메시지 요약${topics.length ? ' — 다룬 주제: ' + topics.join(', ') : ''}]`,
+  };
+  return [summary, ...recent];
+}
+
+/* ============================================================
+   🎯 #3 질문별 관련 케이스 힌트 — 키워드 매칭 Top 3 ID
+   ============================================================ */
+function pickRelevantCases(query, cases) {
+  if (!query || !Array.isArray(cases) || cases.length === 0) return [];
+  const q = query.toLowerCase();
+  const words = q.split(/[\s,.!?·~()\[\]]+/).filter((w) => w.length >= 2);
+  if (words.length === 0) return [];
+
+  const scored = cases.map((c) => {
+    const hay = [
+      c.label, c.client, c.title, c.description,
+      ...(c.tags || []), ...(c.features || []),
+    ].filter(Boolean).join(' ').toLowerCase();
+    let score = 0;
+    for (const w of words) {
+      if (hay.includes(w)) score += w.length;
+    }
+    return { c, score };
+  });
+
+  return scored
+    .filter((x) => x.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 3)
+    .map((x) => x.c.label || x.c.title || x.c.id)
+    .filter(Boolean);
+}
+
+/* ============================================================
    Gemini call via Netlify Function — SSE streaming (Top 9)
    ============================================================ */
 async function askGemini({ onToken } = {}) {
@@ -833,8 +927,24 @@ async function askGemini({ onToken } = {}) {
 
   const cfg = store.chatConfig.get();
   const systemPromptExtra = cfg.systemPromptExtra || '';
-  // 💰 비용 절감 #3 — 대화 히스토리 최근 12개(6 turn)만 전송 (긴 대화 비용 폭발 방지)
-  const messages = conversation.slice(-LIMITS.historyToSend).map((m) => ({ role: m.role, text: m.text }));
+  // 💰 대화 히스토리 — slice(12) 후 추가 압축 (#2)
+  let messages = conversation.slice(-LIMITS.historyToSend).map((m) => ({ role: m.role, text: m.text }));
+  messages = compressHistory(messages);
+
+  // 🎯 #3 관련 케이스 힌트 — 사용자 마지막 질문 기준 Top 3 ID 추출
+  // 시스템 프롬프트엔 전체 케이스가 있지만, 힌트로 AI 주의를 집중
+  const userLast = messages.filter((m) => m.role === 'user').slice(-1)[0]?.text || '';
+  const hints = pickRelevantCases(userLast, context.cases);
+  if (hints.length && messages.length) {
+    // 마지막 user 메시지 앞에 힌트 주입 (시스템 프롬프트 캐시 깨지 않음)
+    const lastIdx = messages.length - 1;
+    if (messages[lastIdx].role === 'user') {
+      messages[lastIdx] = {
+        role: 'user',
+        text: `[관련 케이스 힌트: ${hints.join(', ')}]\n${messages[lastIdx].text}`,
+      };
+    }
+  }
 
   const r = await fetch('/api/chat', {
     method: 'POST',
@@ -946,6 +1056,25 @@ async function send(question) {
     return;
   }
 
+  // 💰 #5(a) 세션 비용 하드캡 — 누적 비용이 임계 넘으면 자동 PM 상담 유도
+  // 운영자는 면제 (어드민 작업 비용 정상)
+  const _auth = store.auth.get();
+  const _isAdmin = !!(_auth && _auth.email);
+  if (!_isAdmin && sessionCostUsd >= LIMITS.sessionCostHardUsd) {
+    conversation.push({ role: 'user', text: question ?? input.value, at: utils.nowIso() });
+    bubble(question ?? input.value, 'user');
+    const msg = `이 세션의 AI 응답이 충분히 길어졌습니다 😊\n\n` +
+      `더 정확한 답변을 위해 박두용 PM이 직접 안내드리는 게 좋을 것 같아요. ` +
+      `[30분 무료 상담 신청](/#contact) 부탁드립니다. ` +
+      `또는 010-2807-5242로 직접 연락주셔도 됩니다.`;
+    const el = bubble('', 'bot', true);
+    streamInto(el, msg, 14);
+    conversation.push({ role: 'bot', text: msg, at: utils.nowIso() });
+    persistLog();
+    input.value = '';
+    return;
+  }
+
   sending = true;
   input.value = '';
 
@@ -963,6 +1092,16 @@ async function send(question) {
       const el = bubble('', 'bot');
       await streamInto(el, shortReply, 12);
       conversation.push({ role: 'bot', text: shortReply, at: utils.nowIso() });
+      persistLog();
+      sending = false;
+      return;
+    }
+    // 💰 #4 Frozen Response 매칭 — Gemini 호출 0
+    const frozenReply = tryFrozenResponse(q);
+    if (frozenReply) {
+      const el = bubble('', 'bot');
+      await streamInto(el, frozenReply, 14);
+      conversation.push({ role: 'bot', text: frozenReply, at: utils.nowIso() });
       persistLog();
       sending = false;
       return;
@@ -1000,6 +1139,12 @@ async function send(question) {
       });
       // 한도 임박 경고
       checkBudgetWarning();
+      // 💰 #5(a) 세션 비용 누적
+      sessionCostUsd += geminiRes.cost_usd || 0;
+      if (!sessionCostWarned && sessionCostUsd >= LIMITS.sessionCostSoftUsd) {
+        sessionCostWarned = true;
+        console.warn(`[chatbot] 세션 비용 ${sessionCostUsd.toFixed(4)}USD — 소프트 캡(${LIMITS.sessionCostSoftUsd}) 도달`);
+      }
     }
   } catch (e) {
     console.warn('[chatbot] Gemini failed, using fallback', e);

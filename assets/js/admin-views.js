@@ -24,6 +24,7 @@ export const VIEWS = {
   automation: { title: '자동화 룰', sub: '이메일·카톡 트리거' },
   kpi: { title: 'KPI 분석', sub: '리드 전환 · 매출 추세 · 채널 분석' },
   analytics: { title: 'AI 분석', sub: 'A/B 변형 비교 · 시간대 히트맵 · 상위 질문' },
+  knowledge: { title: '지식 베이스 (사전 응답)', sub: 'Gemini 호출 없이 즉시 응답 — 비용 0' },
   portal: { title: '클라이언트 포털', sub: '고객 계정 · 권한' },
   settings: { title: '설정', sub: '가격표 · 브랜드 · 팀멤버' },
 };
@@ -2178,6 +2179,207 @@ export function mountAnalytics() {
       e.preventDefault();
       window.navTo?.(a.dataset.nav);
     });
+  });
+}
+
+/* ============================================================
+   11.6  Knowledge Base — Frozen Responses (Top-N 사전 응답) #4
+   - 키워드 매칭 → Gemini 호출 0, 즉시 응답
+   - 분석 페이지의 "상위 질문 TOP 10"에서 추출 가능
+   ============================================================ */
+export function renderKnowledge() {
+  const items = store.frozenResponses.all();
+  const chatLogs = store.chatLogs.all();
+  const usageLog = store.usageLog.all();
+
+  // 절감 효과 추정: hits × 평균 호출 비용
+  const totalHits = items.reduce((s, x) => s + (x.hits || 0), 0);
+  const recentLog = usageLog.slice(-50);
+  const avgCost = recentLog.length
+    ? recentLog.reduce((s, e) => s + (e.cost_usd || 0), 0) / recentLog.length
+    : 0.00025;
+  const savedUsd = (totalHits * avgCost).toFixed(4);
+
+  // 상위 첫 질문 (자동 제안용)
+  const firstQs = {};
+  chatLogs.forEach((l) => {
+    const firstUser = (l.messages || []).find((m) => m.role === 'user');
+    if (!firstUser?.text) return;
+    const key = firstUser.text.trim().slice(0, 80);
+    firstQs[key] = (firstQs[key] || 0) + 1;
+  });
+  const suggestions = Object.entries(firstQs)
+    .filter(([q]) => !items.some((x) => (x.keywords || []).some((k) => q.toLowerCase().includes((k || '').toLowerCase()))))
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5);
+
+  return `
+    <div class="adm-card" style="border-left:4px solid var(--success);background:linear-gradient(90deg,var(--success-soft),var(--canvas) 30%)">
+      <h3>💰 사전 응답 캐시 효과
+        <span style="font-size:12px;font-weight:400;color:var(--steel)">${items.length}개 등록 · 누적 적중 ${totalHits}회</span>
+      </h3>
+      <div class="desc">PM이 직접 작성한 "표준 답변"을 키워드와 매칭. 매칭되면 Gemini API 호출 없이 즉시 답변 → <b>비용 0</b>.</div>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:10px">
+        <div style="padding:14px 16px;background:var(--surface-softer);border-radius:var(--r-md)">
+          <div style="font-size:10px;font-weight:700;color:var(--steel);text-transform:uppercase">등록 응답</div>
+          <div style="font-size:22px;font-weight:800;color:var(--ink-deep);margin-top:4px">${items.length}건</div>
+        </div>
+        <div style="padding:14px 16px;background:var(--surface-softer);border-radius:var(--r-md)">
+          <div style="font-size:10px;font-weight:700;color:var(--steel);text-transform:uppercase">누적 적중</div>
+          <div style="font-size:22px;font-weight:800;color:var(--success);margin-top:4px">${totalHits}회</div>
+        </div>
+        <div style="padding:14px 16px;background:var(--surface-softer);border-radius:var(--r-md)">
+          <div style="font-size:10px;font-weight:700;color:var(--steel);text-transform:uppercase">예상 절감</div>
+          <div style="font-size:22px;font-weight:800;color:var(--success);margin-top:4px">$${savedUsd}</div>
+        </div>
+      </div>
+    </div>
+
+    ${suggestions.length > 0 ? `
+      <div class="adm-card" style="border-left:4px solid var(--cobalt)">
+        <h3>💡 추천 — 사용자가 자주 묻는 질문 ${suggestions.length}개</h3>
+        <div class="desc">아직 표준 답변이 없는 질문입니다. 클릭하면 키워드와 답변 초안이 자동으로 채워집니다.</div>
+        <div style="display:flex;flex-direction:column;gap:6px;margin-top:10px">
+          ${suggestions.map(([q, n]) => `
+            <button class="adm-btn ghost" style="text-align:left;justify-content:space-between;padding:10px 14px" data-suggest="${escapeHtml(q)}">
+              <span style="font-size:13px;color:var(--ink)">${escapeHtml(q)}</span>
+              <span style="font-size:11px;color:var(--cobalt-deep);font-weight:700">${n}회 · 클릭하면 추가 →</span>
+            </button>
+          `).join('')}
+        </div>
+      </div>
+    ` : ''}
+
+    <div class="adm-card">
+      <h3>📚 등록된 사전 응답
+        <button class="adm-btn sm" id="newFrozenBtn">+ 새 응답 추가</button>
+      </h3>
+      <div class="desc">키워드(AND/OR)와 답변을 작성. 사용자 질문에 모든(또는 일부) 키워드가 포함되면 즉시 응답.</div>
+      ${items.length === 0 ? emptyState('🧊', '아직 등록된 사전 응답이 없습니다. 위 추천에서 클릭하거나 + 버튼으로 시작하세요.') : `
+        <table class="adm-table">
+          <thead>
+            <tr>
+              <th style="width:18%">제목</th>
+              <th style="width:24%">키워드</th>
+              <th style="width:36%">답변 (앞 80자)</th>
+              <th style="width:8%">매칭</th>
+              <th style="width:6%">적중</th>
+              <th style="width:8%">상태</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            ${items.map((x) => `
+              <tr>
+                <td><b>${escapeHtml(x.title || '제목 없음')}</b></td>
+                <td style="font-size:12px">
+                  ${(x.keywords || []).map((k) => `<span class="tag info" style="margin:1px 2px">${escapeHtml(k)}</span>`).join('')}
+                </td>
+                <td style="font-size:13px;color:var(--ink)">${escapeHtml((x.answer || '').slice(0, 80))}${(x.answer || '').length > 80 ? '…' : ''}</td>
+                <td style="font-size:11px;color:var(--steel)">${x.matchMode === 'any' ? 'OR' : 'AND (전부)'}</td>
+                <td style="text-align:center;font-weight:700;color:var(--cobalt-deep)">${x.hits || 0}</td>
+                <td>${x.disabled ? '<span class="tag warning">비활성</span>' : '<span class="tag success">활성</span>'}</td>
+                <td>
+                  <button class="adm-btn sm secondary" data-edit-frozen="${x.id}">편집</button>
+                  <button class="adm-btn sm ghost" data-del-frozen="${x.id}">삭제</button>
+                </td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      `}
+    </div>
+
+    <div class="adm-card" style="background:var(--surface-softer)">
+      <h3>📌 사용 팁</h3>
+      <ul style="margin:8px 0 0;padding-left:20px;font-size:13px;line-height:1.8;color:var(--ink)">
+        <li><b>키워드 매칭 (AND)</b>: "쇼핑몰 견적" 등록 시, 사용자 질문에 <code>쇼핑몰</code>과 <code>견적</code>이 <b>둘 다</b> 포함돼야 매칭</li>
+        <li><b>키워드 매칭 (OR)</b>: 키워드 중 하나만 포함돼도 매칭 — 폭넓은 질문에 적합 (단 정확도↓)</li>
+        <li><b>우선순위</b>: 폴백(인사) > Frozen Response > Gemini API. 즉 인사말은 frozen 안 거치고 즉시 응답</li>
+        <li><b>편집 빈도</b>: 분석 페이지의 "상위 질문 TOP 10"을 보고 매주/매월 추가하세요</li>
+        <li><b>비용</b>: Frozen 매칭당 비용 $0. AI 호출 대비 100% 절감</li>
+      </ul>
+    </div>
+  `;
+}
+
+export function mountKnowledge() {
+  $('#newFrozenBtn')?.addEventListener('click', () => openFrozenDrawer(null));
+  $$('[data-edit-frozen]').forEach((b) => b.addEventListener('click', () => openFrozenDrawer(b.dataset.editFrozen)));
+  $$('[data-del-frozen]').forEach((b) => b.addEventListener('click', () => {
+    if (!window.confirm('이 사전 응답을 삭제하시겠습니까?')) return;
+    store.frozenResponses.remove(b.dataset.delFrozen);
+    toast('삭제되었습니다', 'success');
+    window.rerenderView?.();
+  }));
+  $$('[data-suggest]').forEach((b) => b.addEventListener('click', () => {
+    const q = b.dataset.suggest;
+    // 자주 묻는 질문에서 자동으로 키워드 추출 (1~3음절 의미 단어)
+    const words = q.split(/[\s,.!?·~()\[\]]+/).filter((w) => w.length >= 2 && w.length <= 10);
+    const keywords = words.slice(0, 3);
+    openFrozenDrawer(null, { title: q.slice(0, 30), keywords });
+  }));
+}
+
+function openFrozenDrawer(id, prefill = null) {
+  const isEdit = !!id;
+  const x = id ? store.frozenResponses.byId(id) : (prefill || {
+    title: '', keywords: [], answer: '', matchMode: 'all', disabled: false,
+  });
+  const kwStr = (x.keywords || []).join(', ');
+  openDrawer({
+    title: isEdit ? '사전 응답 편집' : '+ 새 사전 응답',
+    body: `
+      <div class="adm-field">
+        <label>제목 (관리용)</label>
+        <input id="fr_title" value="${escapeHtml(x.title || '')}" placeholder="예: 쇼핑몰 견적 문의">
+      </div>
+      <div class="adm-field">
+        <label>키워드 (쉼표로 구분, 소문자 권장)</label>
+        <input id="fr_kw" value="${escapeHtml(kwStr)}" placeholder="예: 쇼핑몰, 견적">
+        <div style="font-size:11px;color:var(--steel);margin-top:4px">예: <code>쇼핑몰, 견적</code> → 사용자 질문에 "쇼핑몰"과 "견적" 모두 포함 시 매칭</div>
+      </div>
+      <div class="adm-field">
+        <label>매칭 모드</label>
+        <select id="fr_mode">
+          <option value="all" ${x.matchMode !== 'any' ? 'selected' : ''}>AND (모든 키워드 포함 — 권장, 정확도↑)</option>
+          <option value="any" ${x.matchMode === 'any' ? 'selected' : ''}>OR (키워드 중 하나만 포함)</option>
+        </select>
+      </div>
+      <div class="adm-field">
+        <label>답변 (마크다운 지원)</label>
+        <textarea id="fr_answer" rows="8" placeholder="답변 내용을 작성하세요. **굵게**, [링크](/#pricing) 사용 가능">${escapeHtml(x.answer || '')}</textarea>
+        <div style="font-size:11px;color:var(--steel);margin-top:4px">팁: 답변 끝에 [상담 신청](/#contact) 같은 액션 링크를 넣으면 전환율↑</div>
+      </div>
+      <div class="adm-field">
+        <label><input type="checkbox" id="fr_disabled" ${x.disabled ? 'checked' : ''}> 일시 비활성화</label>
+      </div>
+      ${isEdit ? `<div style="padding:10px 14px;background:var(--surface-softer);border-radius:var(--r-md);font-size:12px;color:var(--steel);margin-top:14px">누적 적중: <b style="color:var(--cobalt-deep)">${x.hits || 0}회</b>${x.lastHitAt ? ` · 최근: ${fmt.rel(x.lastHitAt)}` : ''}</div>` : ''}
+    `,
+    footer: `
+      <button class="adm-btn ghost" id="frCancel">취소</button>
+      <button class="adm-btn" id="frSave">${isEdit ? '저장' : '추가'}</button>
+    `,
+  });
+
+  $('#frCancel')?.addEventListener('click', () => closeDrawer());
+  $('#frSave')?.addEventListener('click', () => {
+    const title = $('#fr_title').value.trim();
+    const keywords = $('#fr_kw').value.split(',').map((k) => k.trim()).filter(Boolean);
+    const answer = $('#fr_answer').value.trim();
+    const matchMode = $('#fr_mode').value;
+    const disabled = $('#fr_disabled').checked;
+    if (!keywords.length) { toast('키워드를 1개 이상 입력해주세요', 'error'); return; }
+    if (!answer) { toast('답변을 입력해주세요', 'error'); return; }
+    if (isEdit) {
+      store.frozenResponses.update(id, { title, keywords, answer, matchMode, disabled });
+      toast('저장되었습니다', 'success');
+    } else {
+      store.frozenResponses.add({ title, keywords, answer, matchMode, disabled, hits: 0 });
+      toast('추가되었습니다', 'success');
+    }
+    closeDrawer();
+    window.rerenderView?.();
   });
 }
 

@@ -13,7 +13,7 @@ import { getStore } from '@netlify/blobs';
 const ALLOWED_KEYS = new Set([
   'cases', 'faqs', 'posts', 'leads', 'quotes', 'projects',
   'invoices', 'clients', 'automations', 'chatLogs', 'chatConfig',
-  'settings', 'pricing', 'scheduledTasks', 'usageLog',
+  'settings', 'pricing', 'scheduledTasks', 'usageLog', 'frozenResponses',
 ]);
 
 const STORE_NAME = 'hamkkework';

@@ -133,13 +133,6 @@ export default async (req) => {
   const { messages = [], context = {}, systemPromptExtra = '', auth = null, variant = 'A' } = payload;
   const isAdmin = !!(auth && auth.email);
 
-  // 🧪 A/B 테스트 — variant에 따라 톤 지침 주입 (Top 12)
-  // A: 친근 (기본 동작) / B: 격식
-  const variantInstruction = variant === 'B'
-    ? '\n[A/B 실험: 변형 B — 격식 톤] 정중하고 격식 있는 존댓말을 사용하세요. 이모지는 최소화하고, 비즈니스 메일 톤을 유지하세요.'
-    : '';
-  const finalSystemPromptExtra = (systemPromptExtra || '') + variantInstruction;
-
   if (!Array.isArray(messages) || messages.length === 0) {
     return json(400, { error: 'messages array required' });
   }
@@ -158,14 +151,27 @@ export default async (req) => {
     }
   }
 
-  const system = buildSystemPrompt(context, finalSystemPromptExtra, { isAdmin, auth });
+  // 🧊 #1 IMPLICIT CACHING — system prompt를 정적/동적으로 분리
+  // 정적 부분 (회사·가격·케이스·FAQ·도구·가이드)은 systemInstruction에 → Gemini 자동 캐시 (-75%)
+  // 동적 부분 (운영자 데이터·variant 톤·extra)은 contents 첫 user 메시지로 주입
+  const { staticPrompt, dynamicPreamble } = buildSystemPrompt(context, systemPromptExtra, { isAdmin, auth, variant });
 
-  const contents = messages
+  // Convert internal {role, text} → Gemini {role, parts}
+  let contents = messages
     .filter((m) => m.text?.trim())
     .map((m) => ({
       role: m.role === 'user' ? 'user' : 'model',
       parts: [{ text: m.text }],
     }));
+
+  // 동적 preamble이 있으면 contents 맨 앞에 user/model 페어로 주입
+  if (dynamicPreamble) {
+    contents = [
+      { role: 'user', parts: [{ text: dynamicPreamble }] },
+      { role: 'model', parts: [{ text: '확인했습니다. 이어서 답변드리겠습니다.' }] },
+      ...contents,
+    ];
+  }
   const collapsed = collapseTurns(contents);
 
   const model = selectModel({
@@ -192,7 +198,7 @@ export default async (req) => {
       },
       body: JSON.stringify({
         contents: collapsed,
-        systemInstruction: { parts: [{ text: system }] },
+        systemInstruction: { parts: [{ text: staticPrompt }] },
         generationConfig: {
           temperature: 0.4,
           topK: 40,
@@ -311,10 +317,12 @@ function buildStreamTransform(upstreamBody, { model, routing, cacheKey }) {
 }
 
 /* ============================================================
-   System prompt — builds comprehensive RAG context
+   System prompt — splits into STATIC (cacheable) + DYNAMIC (per-call)
+   - staticPrompt: 매 호출 동일 → Gemini Implicit Caching 적용 (-75% 입력)
+   - dynamicPreamble: 운영자 데이터/A-B variant/extra 등 호출별 변경 → contents에 주입
    ============================================================ */
 function buildSystemPrompt(context, extra, mode = {}) {
-  const { isAdmin = false, auth = null } = mode;
+  const { isAdmin = false, auth = null, variant = 'A' } = mode;
   const {
     cases = [], faqs = [], pricing = {}, settings = {}, posts = [],
     chatLogs = [], leads = [], scheduledTasks = [],
@@ -431,22 +439,14 @@ ${posts.filter((p) => p.published !== false).slice(0, 6).map((p) => `- ${p.title
 6. 본문 텍스트 + 액션 블록 함께 (액션만 안 됨)
 `;
 
-  const extraSection = extra ? `\n## 추가 지침 (관리자 설정)\n${extra}\n` : '';
-
-  const adminSection = !isAdmin ? '' : `
+  // ─── 정적 운영자 도구 정의 (운영자 데이터는 제외, 시그니처만) ───
+  // 이 부분은 isAdmin 여부에 따라 다르지만, 같은 isAdmin이면 항상 동일 → 캐시 가능
+  const adminToolsStatic = !isAdmin ? '' : `
 ---
-# 🔑 운영자 모드 (${auth?.name || '박두용 PM'})
+# 🔑 운영자 모드
 - 톤: 동료처럼 짧고 명확 (예: "OK, 처리했어요" / "핫리드 3건")
 - 권한 확장: create_lead 세션 제한 해제 / 모든 도구 사용
 - 회사 소개·영업 톤 불필요 (운영자는 이미 다 앎)
-
-## 운영 컨텍스트 (전송된 경우만)
-${chatLogs.length ? `### 챗봇 대화 (${chatLogs.length}건)
-${chatLogs.slice(-5).map((l) => `[${l.sessionId}] ${(l.messages || []).slice(-3).map((m) => `${m.role[0]}:${(m.text || '').slice(0, 100)}`).join(' | ')}`).join('\n')}` : ''}
-${leads.length ? `### 리드 (${leads.length}건)
-${leads.slice(-10).map((l) => `- ${l.name} | ${l.email || '-'} | ${l.type} | ${l.status}${l.source === 'chatbot-ai' ? ' 🤖' : ''}`).join('\n')}` : ''}
-${scheduledTasks.length ? `### 작업 큐 (${scheduledTasks.length}건)
-${scheduledTasks.slice(0, 8).map((t) => `- [${t.type}] ${t.leadName || t.leadEmail} | ${t.subject || t.topic || ''} | ${t.status}`).join('\n')}` : ''}
 
 ## 운영자 전용 도구 (시그니처)
 | 도구 | 트리거 | 필수 |
@@ -455,11 +455,11 @@ ${scheduledTasks.slice(0, 8).map((t) => `- [${t.type}] ${t.leadName || t.leadEma
 | \`mark_task_done\` | "○○ 처리 완료" | taskId, note |
 | \`summarize_chat\` | "○○ 세션 요약" | sessionId |
 | \`update_lead_stage\` | "○○ 단계 변경" | leadId, stage(new/consult/quote/contract/won/lost) |
-
-첫 인사: "안녕하세요 ${auth?.name || '박두용'}님. 처리 필요: 📞 통화 N · 📨 follow-up M · 🔔 신규 K."
 `;
 
-  return `당신은 함께워크_SI의 공식 AI ${isAdmin ? '**운영자 어시스턴트**' : '상담 에이전트'}입니다.
+  // 🧊 staticPrompt: 매 호출에서 비트단위로 동일 → Gemini Implicit Caching 발동
+  // (isAdmin 여부만 분기 — 즉 캐시 버킷은 admin/non-admin 2개)
+  const staticPrompt = `당신은 함께워크_SI의 공식 AI ${isAdmin ? '**운영자 어시스턴트**' : '상담 에이전트'}입니다.
 
 ${company}
 ${pricingTable}
@@ -468,11 +468,52 @@ ${faqList}
 ${blogList}
 ${processStr}
 ${tools}
-${adminSection}
+${adminToolsStatic}
 ${guide}
-${extraSection}
 
 이제 위의 정보와 도구를 활용해 ${isAdmin ? '운영자 작업을 효율적으로 도와' : '사용자의 요청에 답하'}세요. ${isAdmin ? '간결하고 빠르게 답변하세요.' : '사용자가 "대신 해줘"라고 요청하면 적극적으로 도구를 호출해 직접 처리하세요. 정보에 없는 내용은 추측하지 말고 상담 미팅으로 유도하세요.'}`;
+
+  // 🔄 dynamicPreamble: 호출별 변경되는 부분 → contents 첫 user 메시지로 주입
+  const dynamicParts = [];
+
+  // 운영자 이름 (auth.name이 콜마다 다를 수 있음)
+  if (isAdmin && auth?.name) {
+    dynamicParts.push(`[운영자: ${auth.name}님]`);
+  }
+
+  // 운영 컨텍스트 (chatLogs/leads/scheduledTasks)
+  if (isAdmin) {
+    const opLines = [];
+    if (chatLogs.length) {
+      opLines.push(`### 챗봇 대화 (${chatLogs.length}건)\n` +
+        chatLogs.slice(-5).map((l) => `[${l.sessionId}] ${(l.messages || []).slice(-3).map((m) => `${m.role[0]}:${(m.text || '').slice(0, 100)}`).join(' | ')}`).join('\n'));
+    }
+    if (leads.length) {
+      opLines.push(`### 리드 (${leads.length}건)\n` +
+        leads.slice(-10).map((l) => `- ${l.name} | ${l.email || '-'} | ${l.type} | ${l.status}${l.source === 'chatbot-ai' ? ' 🤖' : ''}`).join('\n'));
+    }
+    if (scheduledTasks.length) {
+      opLines.push(`### 작업 큐 (${scheduledTasks.length}건)\n` +
+        scheduledTasks.slice(0, 8).map((t) => `- [${t.type}] ${t.leadName || t.leadEmail} | ${t.subject || t.topic || ''} | ${t.status}`).join('\n'));
+    }
+    if (opLines.length) {
+      dynamicParts.push(`## 운영 컨텍스트 (현재 상태)\n${opLines.join('\n\n')}`);
+    }
+  }
+
+  // A/B variant 톤
+  if (variant === 'B') {
+    dynamicParts.push('[A/B 실험: 변형 B — 격식 톤] 정중하고 격식 있는 존댓말을 사용하세요. 이모지는 최소화하고, 비즈니스 메일 톤을 유지하세요.');
+  }
+
+  // 어드민이 직접 설정한 추가 지침
+  if (extra) {
+    dynamicParts.push(`## 추가 지침 (관리자 설정)\n${extra}`);
+  }
+
+  const dynamicPreamble = dynamicParts.length ? dynamicParts.join('\n\n') : '';
+
+  return { staticPrompt, dynamicPreamble };
 }
 
 function collapseTurns(contents) {
