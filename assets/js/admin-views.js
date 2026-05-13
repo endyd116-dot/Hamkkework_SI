@@ -2636,7 +2636,20 @@ export function mountPortal() {
 /* ============================================================
    12.5 Calendar — 통합 일정 뷰 + 개인 메모 + Google Calendar 연동
    ============================================================ */
-const _calState = { year: null, month: null }; // month: 0-11
+const _calState = { year: null, month: null, view: 'month' }; // month: 0-11, view: 'month'|'week'
+
+// 캘린더 토큰은 localStorage에만 (sync X — 보안)
+const CAL_TOKEN_LS_KEY = 'hamkkework.calendarToken';
+function _getCalToken() { return localStorage.getItem(CAL_TOKEN_LS_KEY) || ''; }
+function _setCalToken(t) {
+  if (t) localStorage.setItem(CAL_TOKEN_LS_KEY, t);
+  else localStorage.removeItem(CAL_TOKEN_LS_KEY);
+}
+function _buildCalUrl() {
+  const t = _getCalToken();
+  const base = `${location.origin}/api/calendar.ics`;
+  return t ? `${base}?token=${encodeURIComponent(t)}` : base;
+}
 
 function _ymd(d) {
   return d.toISOString().slice(0, 10);
@@ -2709,7 +2722,32 @@ function _collectEvents(dateKey) {
 export function renderCalendar() {
   // state 초기화
   const now = new Date();
-  if (_calState.year == null) { _calState.year = now.getFullYear(); _calState.month = now.getMonth(); }
+  if (_calState.year == null) {
+    _calState.year = now.getFullYear();
+    _calState.month = now.getMonth();
+    _calState.weekStart = _ymd(_startOfWeek(now));
+  }
+  if (_calState.view === 'week') return renderCalendarWeek();
+  return renderCalendarMonth();
+}
+
+function _startOfWeek(d) {
+  const x = new Date(d);
+  x.setHours(0, 0, 0, 0);
+  x.setDate(x.getDate() - x.getDay()); // 일요일 시작
+  return x;
+}
+
+function _viewToggleHtml() {
+  return `
+    <div style="display:inline-flex;border:1px solid var(--line,#ddd);border-radius:8px;overflow:hidden">
+      <button class="cal-view-btn ${_calState.view==='month'?'active':''}" data-view="month" style="padding:6px 12px;border:none;background:${_calState.view==='month'?'var(--cobalt,#0866ff)':'transparent'};color:${_calState.view==='month'?'#fff':'var(--ink)'};cursor:pointer;font-size:12px;font-weight:600">월</button>
+      <button class="cal-view-btn ${_calState.view==='week'?'active':''}" data-view="week" style="padding:6px 12px;border:none;background:${_calState.view==='week'?'var(--cobalt,#0866ff)':'transparent'};color:${_calState.view==='week'?'#fff':'var(--ink)'};cursor:pointer;font-size:12px;font-weight:600">주</button>
+    </div>
+  `;
+}
+
+function renderCalendarMonth() {
   const year = _calState.year;
   const month = _calState.month;
   const monthName = ['1월','2월','3월','4월','5월','6월','7월','8월','9월','10월','11월','12월'][month];
@@ -2740,15 +2778,16 @@ export function renderCalendar() {
   const today = _ymd(new Date());
 
   // Subscribe URL — 어드민 페이지의 origin
-  const subscribeUrl = `${location.origin}/api/calendar.ics`;
+  const subscribeUrl = _buildCalUrl();
 
   return `
     <div class="adm-card" style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
-      <div style="display:flex;gap:10px;align-items:center">
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
         <button class="adm-btn ghost sm" id="cal_prev" title="이전 달">◀</button>
         <h3 style="margin:0">${year}년 ${monthName}</h3>
         <button class="adm-btn ghost sm" id="cal_next" title="다음 달">▶</button>
         <button class="adm-btn secondary sm" id="cal_today">오늘</button>
+        ${_viewToggleHtml()}
       </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button class="adm-btn sm" id="cal_addNote">+ 오늘 메모</button>
@@ -2777,11 +2816,14 @@ export function renderCalendar() {
             weekday === 6 ? 'cal-cell-sat' : '',
           ].filter(Boolean).join(' ');
           return `
-            <div class="${cls}" data-date="${key}">
+            <div class="${cls}" data-date="${key}" data-drop="1">
               <div class="cal-cell-day">${cell.date.getDate()}</div>
               <div class="cal-events">
                 ${visible.map((e) => `
-                  <div class="cal-event" style="background:${e.color}22;color:${e.color};border-left:3px solid ${e.color}" title="${escapeHtml(e.title)}">
+                  <div class="cal-event${e.type==='note'?' cal-event-draggable':''}"
+                       style="background:${e.color}22;color:${e.color};border-left:3px solid ${e.color}"
+                       title="${escapeHtml(e.title)}"
+                       ${e.type==='note' ? `draggable="true" data-drag-note-id="${e.id}"` : ''}>
                     ${e.icon} ${escapeHtml(e.title.slice(0, 14))}${e.title.length>14?'…':''}
                   </div>
                 `).join('')}
@@ -2809,29 +2851,178 @@ export function renderCalendar() {
 }
 
 export function mountCalendar() {
+  // 뷰 토글
+  $$('.cal-view-btn').forEach((b) => b.addEventListener('click', () => {
+    _calState.view = b.dataset.view;
+    if (_calState.view === 'week' && !_calState.weekStart) {
+      _calState.weekStart = _ymd(_startOfWeek(new Date()));
+    }
+    window.rerenderView?.();
+  }));
+
+  // 월간 뷰 이전/다음
   $('#cal_prev')?.addEventListener('click', () => {
-    _calState.month--;
-    if (_calState.month < 0) { _calState.month = 11; _calState.year--; }
+    if (_calState.view === 'week') {
+      const ws = _parseYmd(_calState.weekStart);
+      ws.setDate(ws.getDate() - 7);
+      _calState.weekStart = _ymd(ws);
+    } else {
+      _calState.month--;
+      if (_calState.month < 0) { _calState.month = 11; _calState.year--; }
+    }
     window.rerenderView?.();
   });
   $('#cal_next')?.addEventListener('click', () => {
-    _calState.month++;
-    if (_calState.month > 11) { _calState.month = 0; _calState.year++; }
+    if (_calState.view === 'week') {
+      const ws = _parseYmd(_calState.weekStart);
+      ws.setDate(ws.getDate() + 7);
+      _calState.weekStart = _ymd(ws);
+    } else {
+      _calState.month++;
+      if (_calState.month > 11) { _calState.month = 0; _calState.year++; }
+    }
     window.rerenderView?.();
   });
   $('#cal_today')?.addEventListener('click', () => {
     const n = new Date();
     _calState.year = n.getFullYear();
     _calState.month = n.getMonth();
+    _calState.weekStart = _ymd(_startOfWeek(n));
     window.rerenderView?.();
   });
   $('#cal_addNote')?.addEventListener('click', () => openDayDrawer(_ymd(new Date())));
   $('#cal_gcalGuide')?.addEventListener('click', () => openGcalGuide());
 
-  // 셀 클릭 → 그 날 드로어
+  // 셀 클릭 → 그 날 드로어 (단, 드래그 직후엔 클릭 무시)
+  let suppressClickUntil = 0;
   $$('.cal-cell').forEach((cell) => {
-    cell.addEventListener('click', () => openDayDrawer(cell.dataset.date));
+    cell.addEventListener('click', (e) => {
+      if (Date.now() < suppressClickUntil) return;
+      // 드래그 핸들 클릭은 무시
+      if (e.target.closest('[data-drag-note-id]')) return;
+      openDayDrawer(cell.dataset.date);
+    });
   });
+
+  // 🖐 메모 드래그·드롭 — 메모만 다른 날짜로 이동 (자동 이벤트는 read-only)
+  let draggedNoteId = null;
+  $$('[data-drag-note-id]').forEach((el) => {
+    el.addEventListener('dragstart', (e) => {
+      draggedNoteId = el.dataset.dragNoteId;
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', draggedNoteId);
+      el.style.opacity = '0.4';
+    });
+    el.addEventListener('dragend', () => {
+      el.style.opacity = '';
+      suppressClickUntil = Date.now() + 200;
+    });
+  });
+  $$('[data-drop="1"]').forEach((cell) => {
+    cell.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      cell.classList.add('cal-cell-dropover');
+    });
+    cell.addEventListener('dragleave', () => cell.classList.remove('cal-cell-dropover'));
+    cell.addEventListener('drop', (e) => {
+      e.preventDefault();
+      cell.classList.remove('cal-cell-dropover');
+      const noteId = draggedNoteId || e.dataTransfer.getData('text/plain');
+      if (!noteId) return;
+      const newDate = cell.dataset.date;
+      const note = store.calendarNotes.byId(noteId);
+      if (!note || note.date === newDate) return;
+      store.calendarNotes.update(noteId, { date: newDate });
+      toast(`메모를 ${newDate}로 이동했습니다`, 'success');
+      draggedNoteId = null;
+      window.rerenderView?.();
+    });
+  });
+}
+
+/* 주간 뷰 — 7일 컬럼, 각 날짜별 이벤트 리스트 (드래그·드롭 가능) */
+function renderCalendarWeek() {
+  const subscribeUrl = _buildCalUrl();
+  const weekStart = _parseYmd(_calState.weekStart);
+  const days = [];
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(weekStart);
+    d.setDate(d.getDate() + i);
+    days.push(d);
+  }
+  const weekEnd = days[6];
+  const sameMonth = weekStart.getMonth() === weekEnd.getMonth();
+  const rangeLabel = sameMonth
+    ? `${weekStart.getFullYear()}년 ${weekStart.getMonth()+1}월 ${weekStart.getDate()}일 - ${weekEnd.getDate()}일`
+    : `${weekStart.getFullYear()}년 ${weekStart.getMonth()+1}월 ${weekStart.getDate()}일 - ${weekEnd.getMonth()+1}월 ${weekEnd.getDate()}일`;
+  const today = _ymd(new Date());
+
+  return `
+    <div class="adm-card" style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        <button class="adm-btn ghost sm" id="cal_prev" title="이전 주">◀</button>
+        <h3 style="margin:0">${rangeLabel}</h3>
+        <button class="adm-btn ghost sm" id="cal_next" title="다음 주">▶</button>
+        <button class="adm-btn secondary sm" id="cal_today">이번 주</button>
+        ${_viewToggleHtml()}
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="adm-btn sm" id="cal_addNote">+ 오늘 메모</button>
+        <a class="adm-btn secondary sm" href="${subscribeUrl}" download="hamkkework-calendar.ics" title="iCal 파일 다운로드">📥 .ics 다운로드</a>
+        <button class="adm-btn ghost sm" id="cal_gcalGuide" title="Google Calendar 구독 안내">🗓 Google Calendar 연결</button>
+      </div>
+    </div>
+
+    <div class="adm-card" style="padding:0">
+      <div class="cal-week-grid">
+        ${days.map((d) => {
+          const key = _ymd(d);
+          const events = _collectEvents(key);
+          const isToday = key === today;
+          const weekday = d.getDay();
+          const wname = ['일','월','화','수','목','금','토'][weekday];
+          const cls = [
+            'cal-week-col',
+            isToday ? 'cal-week-col-today' : '',
+            weekday === 0 ? 'cal-week-col-sun' : '',
+            weekday === 6 ? 'cal-week-col-sat' : '',
+          ].filter(Boolean).join(' ');
+          return `
+            <div class="${cls}" data-date="${key}" data-drop="1">
+              <div class="cal-week-head">
+                <div class="cal-week-weekday">${wname}</div>
+                <div class="cal-week-day">${d.getDate()}</div>
+              </div>
+              <div class="cal-week-events">
+                ${events.length === 0 ? '<div class="cal-week-empty">—</div>' : ''}
+                ${events.map((e) => `
+                  <div class="cal-week-event${e.type==='note'?' cal-event-draggable':''}"
+                       style="background:${e.color}22;color:${e.color};border-left:3px solid ${e.color}"
+                       title="${escapeHtml(e.title)}"
+                       ${e.type==='note' ? `draggable="true" data-drag-note-id="${e.id}"` : ''}>
+                    <div style="font-size:11px;font-weight:600">${e.icon} ${escapeHtml(e.title.slice(0, 24))}${e.title.length>24?'…':''}</div>
+                    ${e.sub ? `<div style="font-size:10px;color:var(--steel);margin-top:2px">${escapeHtml(e.sub)}</div>` : ''}
+                  </div>
+                `).join('')}
+              </div>
+            </div>
+          `;
+        }).join('')}
+      </div>
+    </div>
+
+    <div class="adm-card">
+      <h3>범례</h3>
+      <div style="display:flex;flex-wrap:wrap;gap:12px;font-size:13px">
+        <span><span style="display:inline-block;width:12px;height:12px;background:#0866ff;border-radius:3px;margin-right:6px;vertical-align:middle"></span>📞 콜백</span>
+        <span><span style="display:inline-block;width:12px;height:12px;background:#7c3aed;border-radius:3px;margin-right:6px;vertical-align:middle"></span>🚀 프로젝트</span>
+        <span><span style="display:inline-block;width:12px;height:12px;background:#facc15;border-radius:3px;margin-right:6px;vertical-align:middle"></span>📄 견적</span>
+        <span><span style="display:inline-block;width:12px;height:12px;background:#64748b;border-radius:3px;margin-right:6px;vertical-align:middle"></span>✨ 리드</span>
+        <span><span style="display:inline-block;width:12px;height:12px;background:#10b981;border-radius:3px;margin-right:6px;vertical-align:middle"></span>📝 메모 (드래그·드롭으로 날짜 이동)</span>
+      </div>
+    </div>
+  `;
 }
 
 function openDayDrawer(dateKey) {
@@ -2917,7 +3108,8 @@ function openDayDrawer(dateKey) {
 }
 
 function openGcalGuide() {
-  const subscribeUrl = `${location.origin}/api/calendar.ics`;
+  const subscribeUrl = _buildCalUrl();
+  const currentToken = _getCalToken();
   openDrawer({
     title: '🗓 Google Calendar 연결',
     body: `
@@ -2939,8 +3131,21 @@ function openGcalGuide() {
         <h4 style="margin:24px 0 8px;font-size:14px">단발성 가져오기</h4>
         <p style="font-size:13px;color:var(--steel)">Google Calendar 설정 → <b>가져오기/내보내기</b>에서 다운로드한 <code>.ics</code> 파일을 업로드하면 1회만 import됩니다.</p>
 
-        <h4 style="margin:24px 0 8px;font-size:14px">⚠️ 보안 주의</h4>
-        <p style="font-size:12px;color:var(--steel)">현재 URL은 공개 접근 가능합니다. URL을 아는 사람은 모두 일정을 볼 수 있으니 공유 시 주의하세요. 향후 토큰 인증 추가 예정.</p>
+        <h4 style="margin:24px 0 8px;font-size:14px">🔒 토큰 인증 (선택)</h4>
+        <p style="font-size:12px;color:var(--steel);margin-bottom:10px">URL을 비공개로 만들려면 토큰 인증을 활성화하세요. <b>2단계 설정 필요</b>:</p>
+        <ol style="padding-left:20px;font-size:12.5px;line-height:1.7;color:var(--steel)">
+          <li><b>Netlify 환경변수 등록</b>: Site settings → Environment variables → <code>CALENDAR_TOKEN</code> = (임의 32자 문자열, 예: <code id="cal_genToken">${_randToken()}</code> <button class="adm-btn ghost sm" id="cal_regen" style="padding:1px 6px;font-size:10px">🔄</button>)</li>
+          <li><b>이 페이지에 같은 토큰 입력</b>:
+            <div style="display:flex;gap:6px;margin-top:6px">
+              <input id="cal_tokenInput" type="text" value="${escapeHtml(currentToken)}" placeholder="Netlify에 등록한 토큰" style="flex:1;padding:6px 10px;border-radius:6px;border:1px solid var(--line,#ddd);font-family:var(--font-mono,monospace);font-size:12px">
+              <button class="adm-btn sm" id="cal_tokenSave">저장</button>
+              ${currentToken ? '<button class="adm-btn ghost sm" id="cal_tokenClear" style="color:#dc2626">제거</button>' : ''}
+            </div>
+            <div style="font-size:11px;color:var(--steel);margin-top:4px">${currentToken ? '✅ 토큰 활성: URL에 자동 추가됨' : '⚠️ 토큰 미설정: URL 공개 접근 가능'}</div>
+          </li>
+          <li>Netlify Redeploy (또는 새 빌드)</li>
+        </ol>
+        <p style="font-size:11px;color:var(--steel);margin-top:10px">※ 토큰은 이 브라우저에만 저장됩니다 (sync X). 다른 기기에선 다시 입력 필요.</p>
       </div>
     `,
     onMount: () => {
@@ -2948,8 +3153,30 @@ function openGcalGuide() {
         try { await navigator.clipboard.writeText(subscribeUrl); toast('URL 복사됨', 'success'); }
         catch { toast('복사 실패', 'error'); }
       });
+      $('#cal_regen')?.addEventListener('click', () => {
+        $('#cal_genToken').textContent = _randToken();
+      });
+      $('#cal_tokenSave')?.addEventListener('click', () => {
+        const t = $('#cal_tokenInput').value.trim();
+        _setCalToken(t);
+        toast(t ? '토큰 저장됨. URL이 갱신됩니다.' : '토큰 제거됨', 'success');
+        closeDrawer();
+        setTimeout(() => openGcalGuide(), 100);
+      });
+      $('#cal_tokenClear')?.addEventListener('click', () => {
+        _setCalToken('');
+        toast('토큰 제거됨', 'success');
+        closeDrawer();
+        setTimeout(() => openGcalGuide(), 100);
+      });
     },
   });
+}
+
+function _randToken() {
+  const a = new Uint8Array(24);
+  if (typeof crypto !== 'undefined' && crypto.getRandomValues) crypto.getRandomValues(a);
+  return Array.from(a).map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 function openClientDrawer(id) {
   const isEdit = !!id;

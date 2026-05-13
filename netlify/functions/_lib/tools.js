@@ -43,6 +43,7 @@ const READ_ONLY_TOOLS = new Set([
   'daily_briefing',        // 일간 요약 read-only
   'revenue_forecast',      // 매출 예측 read-only
   'frozen_response_suggest', // Frozen 후보 분석 read-only
+  'calendar_events_list',    // 캘린더 이벤트 조회 read-only
   // update_bot_instruction은 mutation이라 캐시 안 함, get은 매번 최신값 받게 캐시 제외
 ]);
 
@@ -595,6 +596,153 @@ export const TOOL_CATALOG = {
           createdAt: q.createdAt,
         }));
       return { total, returned: items.length, items };
+    },
+  },
+
+  // ─────────────────────────────────────────────────────────
+  // 캘린더 이벤트 조회 (calendar_events_list)
+  // 어드민 챗봇: "내일 일정", "이번주 콜백", "5월 15일 뭐 있어"
+  // ─────────────────────────────────────────────────────────
+  calendar_events_list: {
+    adminOnly: true,
+    declaration: {
+      name: 'calendar_events_list',
+      description: 'List calendar events for a date or range. Returns callbacks, project milestones, quotes, leads, invoices, notes. Use when admin asks "오늘 일정"/"내일 뭐 있어"/"이번주 콜백"/"5월 15일 일정". Auto-resolve relative dates using today\'s date from system context.',
+      parameters: {
+        type: 'object',
+        properties: {
+          date: { type: 'string', description: 'YYYY-MM-DD (특정 날짜)' },
+          start_date: { type: 'string', description: 'YYYY-MM-DD (범위 시작)' },
+          end_date: { type: 'string', description: 'YYYY-MM-DD (범위 끝)' },
+          types: { type: 'array', description: 'callback|project|quote|lead|invoice|note 필터 (생략 시 모두)', items: { type: 'string' } },
+        },
+      },
+    },
+    async handler({ date, start_date, end_date, types }) {
+      let from, to;
+      const today = new Date().toISOString().slice(0, 10);
+      if (date) from = to = date;
+      else if (start_date && end_date) { from = start_date; to = end_date; }
+      else { from = to = today; }
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) {
+        return { error: 'invalid_date_format', expected: 'YYYY-MM-DD', from, to };
+      }
+      const filterTypes = Array.isArray(types) ? new Set(types) : null;
+      const include = (t) => !filterTypes || filterTypes.size === 0 || filterTypes.has(t);
+
+      const [tasks, projects, quotes, leads, invoices, notes] = await Promise.all([
+        readCollection('scheduledTasks'),
+        readCollection('projects'),
+        readCollection('quotes'),
+        readCollection('leads'),
+        readCollection('invoices'),
+        readCollection('calendarNotes'),
+      ]);
+
+      const events = [];
+      const inRange = (iso) => {
+        if (!iso) return false;
+        const d = String(iso).slice(0, 10);
+        return d >= from && d <= to;
+      };
+
+      if (include('callback')) {
+        for (const t of tasks) {
+          if (t.type !== 'callback_request') continue;
+          const dateIso = t.scheduledAt || t.createdAt;
+          if (!inRange(dateIso)) continue;
+          events.push({
+            type: 'callback',
+            date: String(dateIso).slice(0, 10),
+            title: `${t.leadName || '고객'} 콜백`,
+            urgent: t.urgency === 'urgent',
+            contact: t.contact,
+            method: t.method,
+            preferredTime: t.preferredTime,
+            status: t.status,
+            id: t.id,
+          });
+        }
+      }
+      if (include('project')) {
+        for (const p of projects) {
+          if (inRange(p.startDate)) events.push({ type: 'project_start', date: String(p.startDate).slice(0, 10), title: p.title || p.clientName, clientName: p.clientName, id: p.id });
+          const due = p.deadline || p.endDate;
+          if (inRange(due)) events.push({ type: 'project_due', date: String(due).slice(0, 10), title: p.title || p.clientName, clientName: p.clientName, id: p.id });
+        }
+      }
+      if (include('quote')) {
+        for (const q of quotes) {
+          if (inRange(q.createdAt)) events.push({ type: 'quote', date: String(q.createdAt).slice(0, 10), title: q.title, clientName: q.clientName, total: q.total, status: q.status, id: q.id });
+        }
+      }
+      if (include('lead')) {
+        for (const l of leads) {
+          if (inRange(l.createdAt)) events.push({ type: 'lead', date: String(l.createdAt).slice(0, 10), title: l.name, company: l.company, status: l.status, id: l.id });
+        }
+      }
+      if (include('invoice')) {
+        for (const inv of invoices) {
+          if (inRange(inv.dueDate)) events.push({ type: 'invoice_due', date: String(inv.dueDate).slice(0, 10), title: inv.clientName, amount: inv.amount, status: inv.status, id: inv.id });
+        }
+      }
+      if (include('note')) {
+        for (const n of notes) {
+          if (n.date >= from && n.date <= to) events.push({ type: 'note', date: n.date, title: n.text, color: n.color, id: n.id });
+        }
+      }
+
+      return {
+        range: { from, to },
+        today,
+        count: events.length,
+        events: events.sort((a, b) => a.date.localeCompare(b.date) || (a.preferredTime || '').localeCompare(b.preferredTime || '')),
+      };
+    },
+  },
+
+  // ─────────────────────────────────────────────────────────
+  // 캘린더 개인 메모 추가 (add_calendar_note)
+  // 어드민 챗봇: "내일 9시 임원회의 메모 추가해줘"
+  // ─────────────────────────────────────────────────────────
+  add_calendar_note: {
+    adminOnly: true,
+    declaration: {
+      name: 'add_calendar_note',
+      description: 'Add a personal note to the admin calendar on a specific date. Use when admin says "내일 ○○ 메모 추가해줘"/"5월 15일에 ○○ 일정 적어줘". Date format YYYY-MM-DD (resolve from today\'s context).',
+      parameters: {
+        type: 'object',
+        required: ['date', 'text'],
+        properties: {
+          date: { type: 'string', description: 'YYYY-MM-DD (절대 형식)' },
+          text: { type: 'string', description: '메모 내용 (간결하게)' },
+          color: { type: 'string', description: '색상 hex: #10b981(녹)/#0866ff(파)/#f59e0b(노)/#dc2626(빨)/#7c3aed(보) — 기본 녹색' },
+        },
+      },
+    },
+    async handler({ date, text, color }) {
+      if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return { error: 'invalid_date', expected: 'YYYY-MM-DD', got: date };
+      if (!text || !String(text).trim()) return { error: 'text_required' };
+      const valid = ['#10b981', '#0866ff', '#f59e0b', '#dc2626', '#7c3aed'];
+      const col = valid.includes(color) ? color : '#10b981';
+      const notes = await readCollection('calendarNotes');
+      const newNote = {
+        id: 'note_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+        date,
+        text: String(text).trim(),
+        color: col,
+        createdAt: new Date().toISOString(),
+        createdBy: 'ai',
+      };
+      notes.unshift(newNote);
+      await writeCollection('calendarNotes', notes);
+      return {
+        ok: true,
+        id: newNote.id,
+        date: newNote.date,
+        text: newNote.text,
+        note: '어드민 캘린더에 메모가 추가되었습니다.',
+      };
     },
   },
 

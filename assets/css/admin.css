@@ -731,3 +731,74 @@ body.admin {
   .cal-events { font-size: 9.5px; }
   .cal-event { padding: 1px 4px; }
 }
+
+/* drop hover */
+.cal-cell-dropover { background: var(--cobalt-soft, #dbeafe) !important; outline: 2px dashed var(--cobalt, #0866ff); outline-offset: -2px; }
+.cal-event-draggable { cursor: grab; }
+.cal-event-draggable:active { cursor: grabbing; }
+
+/* 주간 뷰 */
+.cal-week-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 1px;
+  background: var(--line, #e5e7eb);
+  min-height: 500px;
+}
+.cal-week-col {
+  background: var(--surface, #fff);
+  display: flex;
+  flex-direction: column;
+  min-height: 500px;
+}
+.cal-week-col-today { background: var(--cobalt-softer, #eff5ff); }
+.cal-week-head {
+  padding: 12px 8px;
+  text-align: center;
+  border-bottom: 1px solid var(--line, #e5e7eb);
+  background: var(--surface-soft, #fafafa);
+}
+.cal-week-col-today .cal-week-head { background: var(--cobalt-soft, #dbeafe); }
+.cal-week-weekday {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--steel, #94a3b8);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+.cal-week-col-sun .cal-week-weekday { color: #dc2626; }
+.cal-week-col-sat .cal-week-weekday { color: #2563eb; }
+.cal-week-day {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--ink-deep, #1a1a1a);
+  margin-top: 2px;
+}
+.cal-week-col-today .cal-week-day { color: var(--cobalt-deep, #0049b8); }
+.cal-week-events {
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1;
+}
+.cal-week-event {
+  padding: 6px 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  line-height: 1.4;
+}
+.cal-week-empty {
+  font-size: 11px;
+  color: var(--steel, #94a3b8);
+  text-align: center;
+  padding-top: 20px;
+}
+
+/* week mobile */
+@media (max-width: 768px) {
+  .cal-week-grid { grid-template-columns: 1fr; min-height: auto; }
+  .cal-week-col { min-height: auto; }
+  .cal-week-head { display: flex; gap: 8px; align-items: center; justify-content: space-between; padding: 8px 12px; }
+  .cal-week-day { font-size: 14px; margin: 0; }
+}

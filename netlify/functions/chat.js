@@ -794,6 +794,19 @@ Netlify Blobs DB의 실제 데이터 조회/변경. AI가 functionCall로 호출
 - "○○ 견적서 만들어줘/견적서 등록해줘" → create_quote (clientName/items/total 필수)
 - "○○ 메일 발송 완료 표시/방금 보냈어" → mark_email_sent (emailDrafts.id 필요)
 - "○○ 콜백 취소/작업 삭제/취소해줘" → tasks_delete (status 변경이 아니라 완전 삭제 시. id 1개씩 호출, 여러 건이면 한 번에 1건씩 순차)
+- "오늘 일정/내일 뭐 있어/이번주 콜백/5월 15일 뭐 있어" → calendar_events_list (date 또는 start_date/end_date)
+- "내일 ○○ 메모/○월 ○일에 ○○ 일정 적어줘" → add_calendar_note (date 절대 형식, color 옵션)
+
+## 📅 캘린더 도구 사용 — 날짜 변환 규칙 (중요)
+- 시스템 프롬프트 끝에 "오늘 날짜 = YYYY-MM-DD" 컨텍스트가 주입됨. 그 값을 기준으로 상대 날짜 변환:
+  - "오늘" → today
+  - "내일" → today + 1일
+  - "모레" → today + 2일
+  - "이번주" → date 범위 start_date=오늘, end_date=오늘+6
+  - "다음주" → start_date=오늘+7, end_date=오늘+13
+  - "이번달" → start_date=YYYY-MM-01, end_date=YYYY-MM-마지막날
+  - "5월 15일" / "다음주 월요일" → 절대 날짜로 변환 후 호출
+- 날짜 자체가 모호하면 호출 X, 1회 짧게 확인 ("오늘 일정이요?")
 
 ## 📧 이메일 발송 (send_email) 사용 가이드
 - 이메일 본문은 운영자가 별도 검수 없이 그대로 발송될 수 있으므로 **공손한 한국어 + 회사 시그니처** 포함:
@@ -842,6 +855,11 @@ ${guide}
   // 🔄 dynamicPreamble: 호출별 변경되는 부분 → contents 첫 user 메시지로 주입
   // 🛠 운영 데이터(chatLogs/leads/scheduledTasks)는 더 이상 dump하지 않음 — AI가 도구 호출로 직접 조회
   const dynamicParts = [];
+
+  // 📅 오늘 날짜 (캘린더 도구의 상대 날짜 변환용)
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const todayWeekday = ['일','월','화','수','목','금','토'][new Date().getDay()];
+  dynamicParts.push(`[오늘 = ${todayIso} (${todayWeekday}요일) · 시간대 Asia/Seoul]`);
 
   // 운영자 이름 (auth.name이 콜마다 다를 수 있음)
   if (isAdmin && auth?.name) {
