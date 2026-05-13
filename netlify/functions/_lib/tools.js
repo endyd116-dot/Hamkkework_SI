@@ -39,6 +39,7 @@ const READ_ONLY_TOOLS = new Set([
   'cases_find', 'cases_list',
   'faqs_find',
   'quotes_list',
+  'analyze_chat_patterns', // 분석은 read-only, 5분 캐시 OK
   // update_bot_instruction은 mutation이라 캐시 안 함, get은 매번 최신값 받게 캐시 제외
 ]);
 
@@ -591,6 +592,106 @@ export const TOOL_CATALOG = {
           createdAt: q.createdAt,
         }));
       return { total, returned: items.length, items };
+    },
+  },
+
+  // ─────────────────────────────────────────────────────────
+  // 챗봇 학습 사이클 — 자주 묻는 패턴 + 약한 응답 분석
+  // 운영자가 "분석해줘"/"개선할 부분"/"자주 묻는 질문" 등 요청 시 호출
+  // ─────────────────────────────────────────────────────────
+  analyze_chat_patterns: {
+    adminOnly: true,
+    declaration: {
+      name: 'analyze_chat_patterns',
+      description: 'Analyze recent chatLogs to find frequent topics, weak AI responses, and suggest new bot rules. Use when admin asks "분석해줘" / "개선할 부분" / "자주 묻는 질문" / "패턴 찾아줘".',
+      parameters: {
+        type: 'object',
+        properties: {
+          since: { type: 'string', description: '7d|30d|90d (default 7d)' },
+          min_count: { type: 'number', description: '키워드 최소 빈도 (default 2)' },
+        },
+      },
+    },
+    async handler({ since, min_count }) {
+      const days = parseSince(since) || 7;
+      const minCount = Math.max(1, Number(min_count) || 2);
+      const logs = await readCollection('chatLogs');
+      const recent = logs.filter((l) => withinDays(l.updatedAt, days));
+
+      // 1) 사용자 메시지 + 직후 봇 답변 페어 수집
+      const pairs = [];
+      const userMessages = [];
+      for (const log of recent) {
+        const msgs = log.messages || [];
+        for (let i = 0; i < msgs.length; i++) {
+          const m = msgs[i];
+          if (m.role !== 'user' || !m.text) continue;
+          userMessages.push(m.text.trim());
+          const next = msgs[i + 1];
+          if (next && next.role === 'bot' && next.text) {
+            pairs.push({ q: m.text.trim(), a: next.text.trim(), sessionId: log.sessionId });
+          }
+        }
+      }
+
+      if (userMessages.length === 0) {
+        return {
+          period_days: days,
+          total_sessions: recent.length,
+          total_questions: 0,
+          message: '분석할 대화가 없습니다.',
+        };
+      }
+
+      // 2) 키워드 빈도 분석 (단순 어절 기반 + 흔한 stopword 제거)
+      const STOPWORDS = new Set([
+        '있어', '있나', '하면', '하나', '있는', '되나', '있어요', '하나요', '인가요', '인가',
+        '입니다', '있을까요', '하는', '있고', '됩니다', '있는데', '있습니다', '드릴', '주세요',
+        '같은', '같이', '정도', '하고', '있는지', '대해', '뭐가', '저는', '제가',
+        'the', 'and', 'for', 'are', 'is', 'be', 'to', 'of', 'a', 'an',
+      ]);
+      const wordCounts = new Map();
+      for (const text of userMessages) {
+        const words = (text.toLowerCase().match(/[가-힣a-z0-9]{2,}/g) || []);
+        const uniq = new Set(words);
+        for (const w of uniq) {
+          if (STOPWORDS.has(w) || w.length > 12) continue;
+          wordCounts.set(w, (wordCounts.get(w) || 0) + 1);
+        }
+      }
+      const topKeywords = [...wordCounts.entries()]
+        .filter(([, c]) => c >= minCount)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 12)
+        .map(([word, count]) => ({ word, count, pct: Math.round((count / userMessages.length) * 100) }));
+
+      // 3) 약한 응답 케이스 — fallback 텍스트 / 너무 짧음 / 회피성
+      const fallbackPatterns = /응답이 잠시 어려운|미연결|받지 못했|좀더 구체적|구체적으로 말씀해|죄송합니다.*응답을 생성|모르겠/;
+      const avoidPatterns = /상담을 통해|미팅을 통해|상담에서 안내/;
+      const weakSamples = [];
+      for (const pair of pairs) {
+        const isFallback = fallbackPatterns.test(pair.a);
+        const isTooShort = pair.a.length < 25;
+        const isAvoidance = avoidPatterns.test(pair.a) && pair.a.length < 100;
+        if (!isFallback && !isTooShort && !isAvoidance) continue;
+        weakSamples.push({
+          q: truncate(pair.q, 80),
+          a_excerpt: truncate(pair.a, 60),
+          issue: isFallback ? 'fallback' : isTooShort ? 'too_short' : 'avoidance',
+          sessionId: pair.sessionId,
+        });
+        if (weakSamples.length >= 6) break;
+      }
+
+      return {
+        period_days: days,
+        total_sessions: recent.length,
+        total_questions: userMessages.length,
+        top_keywords: topKeywords,
+        weak_response_count: weakSamples.length,
+        weak_samples: weakSamples,
+        hint: 'AI가 결과를 PM에게 자연어로 요약 + 1-3개 새 행동 지침을 제안하고, PM 동의 시 update_bot_instruction을 호출하세요.',
+      };
     },
   },
 
