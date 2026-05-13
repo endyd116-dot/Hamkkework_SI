@@ -221,7 +221,11 @@ export default async (req) => {
    - Iter 2+: SUMMARIZER_INSTRUCTION (~50 tokens), tools 없음   → AI가 결과 요약만
    - text는 즉시 클라이언트로 스트림, tool_call/tool_result는 별도 SSE 이벤트
    ============================================================ */
-const AGENT_MAX_ITERATIONS = 5;
+// 🛡 Agent loop 한도 — Pro 플랜 함수 타임아웃(26초) 안에 들어와야 함
+// Iter 0(도구 호출) + 도구 실행 + Iter 1(요약 답변)이 일반 흐름. 안전 마진으로 3까지만 허용.
+const AGENT_MAX_ITERATIONS = 3;
+// 18초 넘기면 다음 iter 진입 차단(강제 종료) — 26초 한도 - 8초(클라이언트 fetch 안전마진)
+const AGENT_BUDGET_MS = 18_000;
 
 // 🪶 Iter 2+ 전용 경량 요약 프롬프트 — 시스템 프롬프트 2,100 → 60 토큰으로 축소
 const SUMMARIZER_INSTRUCTION = `You are 함께워크_SI assistant. Summarize the tool result above for the user in concise Korean (존댓말, max 3 sentences, highlight key numbers/names). Do NOT call any more tools. If admin user, use peer tone; if customer, use friendly polite tone.`;
@@ -318,11 +322,15 @@ function runAgentStream({ initialContents, systemInstruction, tools, model, maxO
   const allToolCalls = [];
   const totalUsage = { in: 0, out: 0, cached: 0 };
   let lastFinishReason = null;
+  const startedAt = Date.now();
 
   return new ReadableStream({
     async start(controller) {
       try {
         for (let iter = 0; iter < AGENT_MAX_ITERATIONS; iter++) {
+          const elapsed = Date.now() - startedAt;
+          // ⏱ 시간 가드: 다음 iter 진입 전 시간 예산 초과면 도구 끄고 즉시 답변만 받음
+          const timeExceeded = iter > 0 && elapsed > AGENT_BUDGET_MS;
           // 🪶 옵션 3: Iter 1은 full system + tools, Iter 2+는 경량 요약 프롬프트(60 토큰) + tools 없음
           // → Iter 2+의 입력에서 (시스템 2,100 + 도구 ~300) - 60 = ~2,300 토큰 절감
           const isFirstIter = iter === 0;
@@ -330,6 +338,10 @@ function runAgentStream({ initialContents, systemInstruction, tools, model, maxO
             ? systemInstruction
             : { parts: [{ text: SUMMARIZER_INSTRUCTION }] };
           const iterTools = isFirstIter ? tools : undefined;
+          console.log(`[agent] iter=${iter} elapsed=${elapsed}ms tools=${iterTools ? 'yes' : 'no'}${timeExceeded ? ' timeExceeded' : ''}`);
+          if (timeExceeded) {
+            sseEnqueue(controller, 'tool_result', { name: '_timeout_guard', summary: `시간 가드 발동(${elapsed}ms) — 누적 결과로 답변 생성` });
+          }
 
           let upstream;
           try {
@@ -387,12 +399,24 @@ function runAgentStream({ initialContents, systemInstruction, tools, model, maxO
             return;
           }
 
-          // 도구 실행 (병렬)
+          // 도구 실행 (병렬, 각 도구 5초 타임아웃)
+          const TOOL_TIMEOUT_MS = 5_000;
           const callResults = await Promise.all(functionCalls.map(async (call) => {
             sseEnqueue(controller, 'tool_call', { name: call.name, args: call.args });
             allToolCalls.push({ name: call.name, args: call.args, iteration: iter + 1 });
-            const result = await executeServerTool(call.name, call.args, { isAdmin });
-            sseEnqueue(controller, 'tool_result', { name: call.name, summary: summarizeToolResult(result) });
+            const toolStart = Date.now();
+            let result;
+            try {
+              result = await Promise.race([
+                executeServerTool(call.name, call.args, { isAdmin }),
+                new Promise((_, rej) => setTimeout(() => rej(new Error('tool_timeout')), TOOL_TIMEOUT_MS)),
+              ]);
+            } catch (e) {
+              result = { error: `도구 실행 실패: ${e?.message || e}`, name: call.name };
+            }
+            const toolMs = Date.now() - toolStart;
+            console.log(`[tool] ${call.name} ${toolMs}ms`);
+            sseEnqueue(controller, 'tool_result', { name: call.name, summary: summarizeToolResult(result), elapsed_ms: toolMs });
             return { call, result };
           }));
 
