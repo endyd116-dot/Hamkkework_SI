@@ -1133,6 +1133,7 @@ async function send(question) {
         reason: geminiRes.routing?.reason,
         tokens_in: geminiRes.tokens?.in || 0,
         tokens_out: geminiRes.tokens?.out || 0,
+        tokens_cached: geminiRes.tokens?.cached || 0,  // #1 Implicit Cache 적중 추적
         cost_usd: geminiRes.cost_usd || 0,
         sessionId,
         variant,

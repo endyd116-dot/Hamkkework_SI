@@ -64,7 +64,11 @@ function maxTokensFor({ isAdmin, model }) {
 function estimateCostUsd(model, usage) {
   const p = PRICING[model];
   if (!p || !usage) return 0;
-  const inCost  = (usage.promptTokenCount     || 0) * p.in  / 1_000_000;
+  const cached    = usage.cachedContentTokenCount || 0;
+  const total     = usage.promptTokenCount        || 0;
+  const nonCached = Math.max(0, total - cached);
+  // Gemini Implicit Caching: 캐시된 토큰은 입력 단가의 25%만 청구 (75% 할인)
+  const inCost  = (nonCached * p.in + cached * p.in * 0.25) / 1_000_000;
   const outCost = (usage.candidatesTokenCount || 0) * p.out / 1_000_000;
   return inCost + outCost;
 }
@@ -292,9 +296,10 @@ function buildStreamTransform(upstreamBody, { model, routing, cacheKey }) {
           routing,
           finishReason: lastFinishReason,
           tokens: {
-            in:    lastUsage?.promptTokenCount     || null,
-            out:   lastUsage?.candidatesTokenCount || null,
-            total: lastUsage?.totalTokenCount      || null,
+            in:     lastUsage?.promptTokenCount        || null,
+            out:    lastUsage?.candidatesTokenCount    || null,
+            cached: lastUsage?.cachedContentTokenCount || 0,
+            total:  lastUsage?.totalTokenCount         || null,
           },
           cost_usd: costUsd,
           monthly_budget_usd: Number(process.env.GEMINI_MONTHLY_BUDGET_USD || 50),

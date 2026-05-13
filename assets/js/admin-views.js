@@ -80,6 +80,8 @@ export function renderDashboard() {
   const weekAvgCost = sumCost(weekLog) / 7;
   const monthTokensIn = monthLog.reduce((s, e) => s + (e.tokens_in || 0), 0);
   const monthTokensOut = monthLog.reduce((s, e) => s + (e.tokens_out || 0), 0);
+  const monthTokensCached = monthLog.reduce((s, e) => s + (e.tokens_cached || 0), 0);
+  const cacheHitPct = monthTokensIn > 0 ? (monthTokensCached / monthTokensIn) * 100 : 0;
   const flashCalls = monthLog.filter((e) => e.tier === 'flash').length;
   const liteCalls = monthLog.filter((e) => e.tier === 'lite').length;
   const BUDGET = 50;
@@ -129,7 +131,7 @@ export function renderDashboard() {
         <div style="width:${usagePct}%;height:100%;background:${usageColor};transition:width 800ms ease"></div>
       </div>
 
-      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px">
+      <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:14px">
         <div style="padding:12px 14px;background:var(--surface-softer);border-radius:var(--r-md)">
           <div style="font-size:10px;font-weight:700;color:var(--steel);text-transform:uppercase;letter-spacing:.06em">Flash 호출</div>
           <div style="font-size:18px;font-weight:700;color:var(--ink-deep);margin-top:4px">${flashCalls}건</div>
@@ -147,6 +149,11 @@ export function renderDashboard() {
         <div style="padding:12px 14px;background:var(--surface-softer);border-radius:var(--r-md)">
           <div style="font-size:10px;font-weight:700;color:var(--steel);text-transform:uppercase;letter-spacing:.06em">Output 토큰</div>
           <div style="font-size:18px;font-weight:700;color:var(--ink-deep);margin-top:4px">${fmt.num(monthTokensOut)}</div>
+        </div>
+        <div style="padding:12px 14px;background:var(--success-soft);border-radius:var(--r-md);border-left:3px solid var(--success)">
+          <div style="font-size:10px;font-weight:700;color:var(--steel);text-transform:uppercase;letter-spacing:.06em">캐시 적중</div>
+          <div style="font-size:18px;font-weight:800;color:var(--success);margin-top:4px">${cacheHitPct.toFixed(0)}%</div>
+          <div style="font-size:11px;color:var(--steel)">${fmt.num(monthTokensCached)} 토큰 -75%</div>
         </div>
       </div>
 
