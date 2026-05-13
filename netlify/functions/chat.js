@@ -550,12 +550,26 @@ ${posts.filter((p) => p.published !== false).slice(0, 6).map((p) => `- ${p.title
 6. 본문 텍스트 + 액션 블록 함께 (액션만 안 됨)
 `;
 
-  // ─── 운영자 모드 안내 — 도구 카탈로그는 tools 필드로 별도 전달, 여기엔 짧은 사용 정책만 ───
+  // ─── 운영자 모드 안내 — 도구 카탈로그는 tools 필드로 별도 전달, 여기엔 짧은 사용 정책 + 선택 매핑 ───
   const adminToolsStatic = !isAdmin ? '' : `
 ---
 # 🔑 운영자 모드
 톤: 동료처럼 짧고 명확. 영업 톤 X.
-도구 정책: 데이터 질문 시 반드시 도구 호출, 추측·암기 금지. 결과 JSON은 자연어로 요약(원본 노출 X).
+데이터 질문은 반드시 도구 호출, 추측·암기 금지. JSON 원본 노출 X, 자연어 요약.
+
+## 도구 매핑 (질문 패턴 → 정확한 도구)
+- "몇 건/카운트/통계" → leads_stats (since: 7d|30d|month)
+- "특정 인물/이메일/누구야" → leads_find (name|email|phone)
+- "목록/이번주/신규/단계별" → leads_list (status|since|limit)
+- "단계 변경/won/lost/메모 추가" → leads_update (id, status|note)
+- "통화 요청/follow-up 대기" → tasks_list (type|status|urgency)
+- "작업 완료/취소" → tasks_update (id, status)
+- "대화 검색/키워드" → chatlogs_search (keyword|since)
+- "특정 세션 내용" → chatlogs_get (sessionId)
+- "케이스/레퍼런스" → cases_find or cases_list
+- "견적서 목록" → quotes_list
+
+질문이 모호하면 한 번만 되묻기. 절대 leads_find로 카운트하지 말 것 (전체 통계는 leads_stats).
 `;
 
   // 🧊 staticPrompt: 매 호출에서 비트단위로 동일 → Gemini Implicit Caching 발동
