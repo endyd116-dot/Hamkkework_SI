@@ -118,6 +118,7 @@ const VIEW_FNS = {
   analytics: { render: Views.renderAnalytics, mount: Views.mountAnalytics },
   knowledge: { render: Views.renderKnowledge, mount: Views.mountKnowledge },
   portal: { render: Views.renderPortal, mount: Views.mountPortal },
+  calendar: { render: Views.renderCalendar, mount: Views.mountCalendar },
   settings: { render: Views.renderSettings, mount: Views.mountSettings },
 };
 

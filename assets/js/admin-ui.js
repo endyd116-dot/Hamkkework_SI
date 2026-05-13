@@ -68,12 +68,16 @@ const drawerTitle = $('#drawerTitle');
 const drawerBody = $('#drawerBody');
 const drawerFooter = $('#drawerFooter');
 
-export function openDrawer({ title, body, footer }) {
+export function openDrawer({ title, body, footer, onMount }) {
   if (drawerTitle) drawerTitle.textContent = title || '';
   if (drawerBody) drawerBody.innerHTML = body || '';
   if (drawerFooter) drawerFooter.innerHTML = footer || '';
   drawer?.classList.add('open');
   overlay?.classList.add('open');
+  if (typeof onMount === 'function') {
+    // 다음 tick에 호출 (innerHTML 적용 보장)
+    setTimeout(onMount, 0);
+  }
 }
 export function closeDrawer() {
   drawer?.classList.remove('open');

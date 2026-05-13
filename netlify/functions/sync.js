@@ -16,6 +16,7 @@ const ALLOWED_KEYS = new Set([
   'settings', 'pricing', 'scheduledTasks', 'usageLog', 'frozenResponses',
   'adminCredentials', // 어드민 계정 (이메일, 이름, 휴대폰, role, passwordHash, salt)
   'emailDrafts',      // AI/PM 작성 이메일 (draft/sent/failed)
+  'calendarNotes',    // 어드민 개인 메모 ({id, date, text, color})
 ]);
 
 const STORE_NAME = 'hamkkework';

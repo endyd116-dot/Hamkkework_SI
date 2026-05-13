@@ -2632,6 +2632,325 @@ export function mountPortal() {
     window.rerenderView?.();
   }));
 }
+
+/* ============================================================
+   12.5 Calendar — 통합 일정 뷰 + 개인 메모 + Google Calendar 연동
+   ============================================================ */
+const _calState = { year: null, month: null }; // month: 0-11
+
+function _ymd(d) {
+  return d.toISOString().slice(0, 10);
+}
+function _parseYmd(s) {
+  if (!s) return null;
+  const [y, m, d] = s.split('-').map(Number);
+  return new Date(y, m - 1, d);
+}
+
+// 한 날의 모든 이벤트 수집
+function _collectEvents(dateKey) {
+  const events = [];
+  const sameDay = (iso) => {
+    if (!iso) return false;
+    try { return new Date(iso).toISOString().slice(0, 10) === dateKey; } catch { return false; }
+  };
+
+  // 콜백 요청 (preferredTime 자유 텍스트지만 createdAt 기준)
+  for (const t of store.scheduledTasks.all()) {
+    if (t.type !== 'callback_request') continue;
+    if (sameDay(t.createdAt || t.scheduledAt)) {
+      events.push({
+        type: 'callback',
+        icon: '📞',
+        color: t.urgency === 'urgent' ? '#dc2626' : '#0866ff',
+        title: `${t.leadName || '고객'} 콜백`,
+        sub: t.preferredTime || t.contact,
+        urgent: t.urgency === 'urgent',
+        id: t.id,
+      });
+    }
+  }
+  // 프로젝트 시작
+  for (const p of store.projects.all()) {
+    if (sameDay(p.startDate)) {
+      events.push({ type: 'project_start', icon: '🚀', color: '#7c3aed', title: `${p.title || p.clientName} 시작`, id: p.id });
+    }
+    if (sameDay(p.deadline || p.endDate)) {
+      events.push({ type: 'project_due', icon: '⏰', color: '#f59e0b', title: `${p.title || p.clientName} 마감`, id: p.id });
+    }
+  }
+  // 견적서 생성
+  for (const q of store.quotes.all()) {
+    if (sameDay(q.createdAt)) {
+      events.push({ type: 'quote', icon: '📄', color: '#facc15', title: `${q.clientName} 견적 ${Math.round(q.total)}만원`, id: q.id });
+    }
+  }
+  // 신규 리드
+  for (const l of store.leads.all()) {
+    if (sameDay(l.createdAt)) {
+      events.push({ type: 'lead', icon: '✨', color: '#64748b', title: `${l.name} ${l.company ? '('+l.company+')' : ''}`, id: l.id });
+    }
+  }
+  // 인보이스 마감
+  for (const inv of store.invoices.all()) {
+    if (sameDay(inv.dueDate)) {
+      events.push({ type: 'invoice_due', icon: '💰', color: '#ef4444', title: `${inv.clientName||'인보이스'} ${inv.amount?'('+inv.amount+'만원)':''} 마감`, id: inv.id });
+    }
+  }
+  // 개인 메모
+  for (const n of store.calendarNotes.all()) {
+    if (n.date === dateKey) {
+      events.push({ type: 'note', icon: '📝', color: n.color || '#10b981', title: n.text, id: n.id, editable: true });
+    }
+  }
+  return events;
+}
+
+export function renderCalendar() {
+  // state 초기화
+  const now = new Date();
+  if (_calState.year == null) { _calState.year = now.getFullYear(); _calState.month = now.getMonth(); }
+  const year = _calState.year;
+  const month = _calState.month;
+  const monthName = ['1월','2월','3월','4월','5월','6월','7월','8월','9월','10월','11월','12월'][month];
+
+  // 월 1일의 요일 (0=일)
+  const firstDay = new Date(year, month, 1);
+  const startWeekday = firstDay.getDay();
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const daysInPrevMonth = new Date(year, month, 0).getDate();
+
+  // 6주 × 7일 = 42 셀
+  const cells = [];
+  for (let i = 0; i < 42; i++) {
+    const dayOffset = i - startWeekday;
+    let cellDate, isThisMonth = true;
+    if (dayOffset < 0) {
+      cellDate = new Date(year, month - 1, daysInPrevMonth + dayOffset + 1);
+      isThisMonth = false;
+    } else if (dayOffset >= daysInMonth) {
+      cellDate = new Date(year, month + 1, dayOffset - daysInMonth + 1);
+      isThisMonth = false;
+    } else {
+      cellDate = new Date(year, month, dayOffset + 1);
+    }
+    cells.push({ date: cellDate, isThisMonth });
+  }
+
+  const today = _ymd(new Date());
+
+  // Subscribe URL — 어드민 페이지의 origin
+  const subscribeUrl = `${location.origin}/api/calendar.ics`;
+
+  return `
+    <div class="adm-card" style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
+      <div style="display:flex;gap:10px;align-items:center">
+        <button class="adm-btn ghost sm" id="cal_prev" title="이전 달">◀</button>
+        <h3 style="margin:0">${year}년 ${monthName}</h3>
+        <button class="adm-btn ghost sm" id="cal_next" title="다음 달">▶</button>
+        <button class="adm-btn secondary sm" id="cal_today">오늘</button>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="adm-btn sm" id="cal_addNote">+ 오늘 메모</button>
+        <a class="adm-btn secondary sm" href="${subscribeUrl}" download="hamkkework-calendar.ics" title="iCal 파일 다운로드">📥 .ics 다운로드</a>
+        <button class="adm-btn ghost sm" id="cal_gcalGuide" title="Google Calendar 구독 안내">🗓 Google Calendar 연결</button>
+      </div>
+    </div>
+
+    <div class="adm-card cal-grid-wrap">
+      <div class="cal-weekdays">
+        ${['일','월','화','수','목','금','토'].map((w, i) => `<div class="cal-weekday ${i===0?'sun':''} ${i===6?'sat':''}">${w}</div>`).join('')}
+      </div>
+      <div class="cal-grid">
+        ${cells.map((cell) => {
+          const key = _ymd(cell.date);
+          const events = _collectEvents(key);
+          const visible = events.slice(0, 3);
+          const more = events.length - visible.length;
+          const isToday = key === today;
+          const weekday = cell.date.getDay();
+          const cls = [
+            'cal-cell',
+            cell.isThisMonth ? '' : 'cal-cell-out',
+            isToday ? 'cal-cell-today' : '',
+            weekday === 0 ? 'cal-cell-sun' : '',
+            weekday === 6 ? 'cal-cell-sat' : '',
+          ].filter(Boolean).join(' ');
+          return `
+            <div class="${cls}" data-date="${key}">
+              <div class="cal-cell-day">${cell.date.getDate()}</div>
+              <div class="cal-events">
+                ${visible.map((e) => `
+                  <div class="cal-event" style="background:${e.color}22;color:${e.color};border-left:3px solid ${e.color}" title="${escapeHtml(e.title)}">
+                    ${e.icon} ${escapeHtml(e.title.slice(0, 14))}${e.title.length>14?'…':''}
+                  </div>
+                `).join('')}
+                ${more > 0 ? `<div class="cal-event-more">+ ${more}건 더</div>` : ''}
+              </div>
+            </div>
+          `;
+        }).join('')}
+      </div>
+    </div>
+
+    <div class="adm-card">
+      <h3>범례</h3>
+      <div style="display:flex;flex-wrap:wrap;gap:12px;font-size:13px">
+        <span><span style="display:inline-block;width:12px;height:12px;background:#0866ff;border-radius:3px;margin-right:6px;vertical-align:middle"></span>📞 콜백 (긴급은 빨강)</span>
+        <span><span style="display:inline-block;width:12px;height:12px;background:#7c3aed;border-radius:3px;margin-right:6px;vertical-align:middle"></span>🚀 프로젝트 시작</span>
+        <span><span style="display:inline-block;width:12px;height:12px;background:#f59e0b;border-radius:3px;margin-right:6px;vertical-align:middle"></span>⏰ 프로젝트 마감</span>
+        <span><span style="display:inline-block;width:12px;height:12px;background:#facc15;border-radius:3px;margin-right:6px;vertical-align:middle"></span>📄 견적서</span>
+        <span><span style="display:inline-block;width:12px;height:12px;background:#64748b;border-radius:3px;margin-right:6px;vertical-align:middle"></span>✨ 신규 리드</span>
+        <span><span style="display:inline-block;width:12px;height:12px;background:#ef4444;border-radius:3px;margin-right:6px;vertical-align:middle"></span>💰 인보이스 마감</span>
+        <span><span style="display:inline-block;width:12px;height:12px;background:#10b981;border-radius:3px;margin-right:6px;vertical-align:middle"></span>📝 메모</span>
+      </div>
+    </div>
+  `;
+}
+
+export function mountCalendar() {
+  $('#cal_prev')?.addEventListener('click', () => {
+    _calState.month--;
+    if (_calState.month < 0) { _calState.month = 11; _calState.year--; }
+    window.rerenderView?.();
+  });
+  $('#cal_next')?.addEventListener('click', () => {
+    _calState.month++;
+    if (_calState.month > 11) { _calState.month = 0; _calState.year++; }
+    window.rerenderView?.();
+  });
+  $('#cal_today')?.addEventListener('click', () => {
+    const n = new Date();
+    _calState.year = n.getFullYear();
+    _calState.month = n.getMonth();
+    window.rerenderView?.();
+  });
+  $('#cal_addNote')?.addEventListener('click', () => openDayDrawer(_ymd(new Date())));
+  $('#cal_gcalGuide')?.addEventListener('click', () => openGcalGuide());
+
+  // 셀 클릭 → 그 날 드로어
+  $$('.cal-cell').forEach((cell) => {
+    cell.addEventListener('click', () => openDayDrawer(cell.dataset.date));
+  });
+}
+
+function openDayDrawer(dateKey) {
+  const d = _parseYmd(dateKey);
+  const dateLabel = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')} (${['일','월','화','수','목','금','토'][d.getDay()]})`;
+  const events = _collectEvents(dateKey).filter((e) => e.type !== 'note');
+  const notes = store.calendarNotes.all().filter((n) => n.date === dateKey);
+
+  openDrawer({
+    title: `📅 ${dateLabel}`,
+    body: `
+      <div style="margin-bottom:16px">
+        <h4 style="margin:0 0 8px;font-size:14px;color:var(--ink-deep)">자동 이벤트 (${events.length})</h4>
+        ${events.length === 0 ? `<div style="color:var(--steel);font-size:13px">예약된 이벤트가 없습니다.</div>` : `
+          <div style="display:grid;gap:6px">
+            ${events.map((e) => `
+              <div style="display:flex;gap:8px;align-items:center;padding:8px 10px;background:${e.color}11;border-left:3px solid ${e.color};border-radius:6px;font-size:13px">
+                <span>${e.icon}</span>
+                <div style="flex:1">
+                  <div style="font-weight:600">${escapeHtml(e.title)}</div>
+                  ${e.sub ? `<div style="font-size:11px;color:var(--steel);margin-top:2px">${escapeHtml(e.sub)}</div>` : ''}
+                </div>
+              </div>
+            `).join('')}
+          </div>
+        `}
+      </div>
+
+      <div>
+        <h4 style="margin:0 0 8px;font-size:14px;color:var(--ink-deep)">📝 개인 메모 (${notes.length})</h4>
+        <div id="cal_notesList" style="display:grid;gap:6px;margin-bottom:10px">
+          ${notes.map((n) => `
+            <div data-note-id="${n.id}" style="display:flex;gap:8px;padding:8px 10px;background:${n.color || '#10b981'}11;border-left:3px solid ${n.color || '#10b981'};border-radius:6px">
+              <textarea data-note-edit="${n.id}" rows="2" style="flex:1;border:none;background:transparent;font-family:inherit;font-size:13px;resize:vertical;outline:none">${escapeHtml(n.text)}</textarea>
+              <button class="adm-btn ghost sm" data-note-del="${n.id}" style="color:#dc2626;align-self:flex-start" title="삭제">✕</button>
+            </div>
+          `).join('')}
+        </div>
+        <div class="adm-field" style="margin:0">
+          <label>새 메모 추가</label>
+          <textarea id="cal_newNote" rows="2" placeholder="이 날의 메모를 입력하세요…"></textarea>
+        </div>
+        <div style="display:flex;gap:6px;margin-top:8px;align-items:center">
+          <select id="cal_newNoteColor" style="padding:6px;border-radius:6px;border:1px solid var(--line, #ddd);font-size:12px">
+            <option value="#10b981">🟢 초록</option>
+            <option value="#0866ff">🔵 파랑</option>
+            <option value="#f59e0b">🟡 노랑</option>
+            <option value="#dc2626">🔴 빨강</option>
+            <option value="#7c3aed">🟣 보라</option>
+          </select>
+          <button class="adm-btn sm" id="cal_saveNote">+ 메모 추가</button>
+        </div>
+      </div>
+    `,
+    onMount: () => {
+      $('#cal_saveNote')?.addEventListener('click', () => {
+        const text = $('#cal_newNote').value.trim();
+        if (!text) return;
+        const color = $('#cal_newNoteColor').value;
+        store.calendarNotes.add({ date: dateKey, text, color });
+        toast('메모 추가됨', 'success');
+        closeDrawer();
+        window.rerenderView?.();
+      });
+      $$('[data-note-edit]').forEach((ta) => {
+        ta.addEventListener('blur', () => {
+          const id = ta.dataset.noteEdit;
+          const text = ta.value.trim();
+          if (!text) { store.calendarNotes.remove(id); return; }
+          store.calendarNotes.update(id, { text });
+        });
+      });
+      $$('[data-note-del]').forEach((b) => {
+        b.addEventListener('click', () => {
+          store.calendarNotes.remove(b.dataset.noteDel);
+          toast('메모 삭제됨', 'success');
+          closeDrawer();
+          window.rerenderView?.();
+        });
+      });
+    },
+  });
+}
+
+function openGcalGuide() {
+  const subscribeUrl = `${location.origin}/api/calendar.ics`;
+  openDrawer({
+    title: '🗓 Google Calendar 연결',
+    body: `
+      <div style="font-size:14px;line-height:1.7;color:var(--ink)">
+        <p>아래 URL을 <b>Google Calendar의 "다른 캘린더 추가 → URL로 추가"</b>에 입력하면 함께워크_SI의 모든 일정이 자동 동기화됩니다.</p>
+        <div style="background:var(--surface-soft, #f5f5f5);padding:12px 14px;border-radius:8px;margin:14px 0;font-family:var(--font-mono, monospace);font-size:13px;word-break:break-all;border:1px solid var(--line, #ddd)">
+          ${escapeHtml(subscribeUrl)}
+        </div>
+        <button class="adm-btn sm" id="cal_copyUrl">📋 URL 복사</button>
+
+        <h4 style="margin:24px 0 8px;font-size:14px">단계별 안내</h4>
+        <ol style="padding-left:20px;font-size:13px;line-height:1.8;color:var(--steel)">
+          <li><a href="https://calendar.google.com" target="_blank" style="color:var(--cobalt, #0866ff)">Google Calendar</a> 접속</li>
+          <li>좌측 사이드바 <b>"다른 캘린더"</b> 옆 <b>+</b> → <b>"URL로 추가"</b></li>
+          <li>위 URL을 붙여넣기 → <b>"캘린더 추가"</b></li>
+          <li>약 6~12시간마다 자동 새로고침 (즉시 반영은 어려움)</li>
+        </ol>
+
+        <h4 style="margin:24px 0 8px;font-size:14px">단발성 가져오기</h4>
+        <p style="font-size:13px;color:var(--steel)">Google Calendar 설정 → <b>가져오기/내보내기</b>에서 다운로드한 <code>.ics</code> 파일을 업로드하면 1회만 import됩니다.</p>
+
+        <h4 style="margin:24px 0 8px;font-size:14px">⚠️ 보안 주의</h4>
+        <p style="font-size:12px;color:var(--steel)">현재 URL은 공개 접근 가능합니다. URL을 아는 사람은 모두 일정을 볼 수 있으니 공유 시 주의하세요. 향후 토큰 인증 추가 예정.</p>
+      </div>
+    `,
+    onMount: () => {
+      $('#cal_copyUrl')?.addEventListener('click', async () => {
+        try { await navigator.clipboard.writeText(subscribeUrl); toast('URL 복사됨', 'success'); }
+        catch { toast('복사 실패', 'error'); }
+      });
+    },
+  });
+}
 function openClientDrawer(id) {
   const isEdit = !!id;
   const c = id ? store.clients.byId(id) : { name: '', email: '', company: '', password: '', projects: [] };

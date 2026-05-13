@@ -95,6 +95,7 @@ const KEYS = {
   frozenResponses: `${NS}.frozenResponses`,  // #4 Top-N 사전 응답 캐시
   adminCredentials: `${NS}.adminCredentials`, // 어드민 계정 (email, name, phone, role, passwordHash, salt)
   emailDrafts: `${NS}.emailDrafts`, // AI/PM이 작성한 이메일 (draft/sent/failed)
+  calendarNotes: `${NS}.calendarNotes`, // 어드민 개인 메모 (date YYYY-MM-DD, text, color)
   auth: `${NS}.auth`,
   theme: `${NS}.theme`,
 };
@@ -165,7 +166,7 @@ const SYNCED_KEYS = [
   'cases', 'faqs', 'posts', 'leads', 'quotes', 'projects',
   'invoices', 'clients', 'automations', 'chatLogs', 'chatConfig',
   'settings', 'pricing', 'scheduledTasks', 'usageLog', 'frozenResponses',
-  'adminCredentials', 'emailDrafts',
+  'adminCredentials', 'emailDrafts', 'calendarNotes',
 ];
 const SYNC_DEBOUNCE_MS = 800;
 const SYNC_POLL_MS = 30_000;
@@ -400,6 +401,7 @@ export const store = {
   usageLog: collection(KEYS.usageLog),
   frozenResponses: collection(KEYS.frozenResponses),  // #4
   emailDrafts: collection(KEYS.emailDrafts),
+  calendarNotes: collection(KEYS.calendarNotes),
 
   pricing: {
     get: () => read(KEYS.pricing, {}),

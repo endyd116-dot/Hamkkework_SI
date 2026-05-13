@@ -649,3 +649,85 @@ body.admin {
 }
 .switch input:checked + .slider { background: var(--cobalt); }
 .switch input:checked + .slider::before { transform: translateX(16px); }
+
+/* ============================================================
+   Calendar view — 통합 일정 + 메모
+   ============================================================ */
+.cal-grid-wrap { padding: 0; overflow: hidden; }
+.cal-weekdays {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  background: var(--surface-soft, #f5f5f5);
+  border-bottom: 1px solid var(--line, #e5e7eb);
+}
+.cal-weekday {
+  padding: 10px 8px;
+  text-align: center;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--ink-deep, #1a1a1a);
+  letter-spacing: 0.04em;
+}
+.cal-weekday.sun { color: #dc2626; }
+.cal-weekday.sat { color: #2563eb; }
+
+.cal-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  grid-auto-rows: minmax(100px, 1fr);
+  gap: 1px;
+  background: var(--line, #e5e7eb);
+}
+.cal-cell {
+  background: var(--surface, #fff);
+  padding: 6px 8px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 100px;
+  transition: background var(--d-fast);
+}
+.cal-cell:hover { background: var(--cobalt-softer, #eff5ff); }
+.cal-cell-out { background: var(--surface-softer, #fafafa); }
+.cal-cell-out .cal-cell-day { color: var(--steel, #94a3b8); opacity: 0.5; }
+.cal-cell-today { background: var(--cobalt-softer, #eff5ff); border: 2px solid var(--cobalt, #0866ff); }
+.cal-cell-today .cal-cell-day { color: var(--cobalt-deep, #0049b8); font-weight: 800; }
+.cal-cell-sun .cal-cell-day { color: #dc2626; }
+.cal-cell-sat .cal-cell-day { color: #2563eb; }
+
+.cal-cell-day {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-deep, #1a1a1a);
+}
+.cal-events {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 10.5px;
+  line-height: 1.3;
+}
+.cal-event {
+  padding: 2px 6px;
+  border-radius: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: 500;
+}
+.cal-event-more {
+  font-size: 10px;
+  color: var(--steel, #94a3b8);
+  padding: 2px 4px;
+  font-weight: 600;
+}
+
+/* mobile */
+@media (max-width: 768px) {
+  .cal-grid { grid-auto-rows: minmax(70px, 1fr); }
+  .cal-cell { padding: 4px 6px; min-height: 70px; }
+  .cal-cell-day { font-size: 11px; }
+  .cal-events { font-size: 9.5px; }
+  .cal-event { padding: 1px 4px; }
+}
