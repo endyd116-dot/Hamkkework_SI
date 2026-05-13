@@ -16,27 +16,34 @@
  * STREAMING:
  *   - SSE events: token | tool_call | tool_result | done | error
  *
- * Environment variables: GEMINI_API_KEY / GEMINI_MODEL_FLASH / GEMINI_MODEL_LITE /
+ * Environment variables: GEMINI_API_KEY / GEMINI_CHAIN_HIGH / GEMINI_CHAIN_LOW /
  *   GEMINI_PRICE_{FLASH|LITE}_{IN|OUT} / GEMINI_MONTHLY_BUDGET_USD
  */
 
 import { getToolDeclarations, executeServerTool, getToolSummary } from './_lib/tools.js';
 
-const MODEL_FLASH = process.env.GEMINI_MODEL_FLASH || 'gemini-2.5-flash';
-const MODEL_LITE  = process.env.GEMINI_MODEL_LITE  || 'gemini-3.1-flash-lite';
+/* ============================================================
+   모델 체인 — 사용자 정의 폴백 순서
+   - HIGH: 어려운 질문(견적/도구/긴 대화/운영자)용 고출력 체인
+   - LOW:  단순 안내용 저출력 체인
+   - 각 체인 첫 모델로 시도 → 5xx/429면 다음 모델로 자동 폴백
+   ============================================================ */
+const MODEL_CHAIN_HIGH = (process.env.GEMINI_CHAIN_HIGH ||
+  'gemini-3-flash-preview,gemini-3.1-flash-lite,gemini-2.5-flash,gemini-2.5-flash-lite'
+).split(',').map((s) => s.trim()).filter(Boolean);
 
+const MODEL_CHAIN_LOW = (process.env.GEMINI_CHAIN_LOW ||
+  'gemini-3.1-flash-lite,gemini-2.5-flash-lite'
+).split(',').map((s) => s.trim()).filter(Boolean);
+
+// 모델별 단가 (USD per 1M tokens) — 미공개 모델은 env로 override 가능
 const PRICING = {
-  [MODEL_FLASH]: {
-    in:  Number(process.env.GEMINI_PRICE_FLASH_IN  || 0.30),
-    out: Number(process.env.GEMINI_PRICE_FLASH_OUT || 2.50),
-  },
-  [MODEL_LITE]: {
-    in:  Number(process.env.GEMINI_PRICE_LITE_IN   || 0.10),
-    out: Number(process.env.GEMINI_PRICE_LITE_OUT  || 0.40),
-  },
+  'gemini-3-flash-preview':   { in: Number(process.env.GEMINI_PRICE_3FLASH_IN   || 0.30), out: Number(process.env.GEMINI_PRICE_3FLASH_OUT   || 2.50) },
+  'gemini-3.1-flash-lite':    { in: Number(process.env.GEMINI_PRICE_31LITE_IN   || 0.10), out: Number(process.env.GEMINI_PRICE_31LITE_OUT   || 0.40) },
+  'gemini-2.5-flash':         { in: Number(process.env.GEMINI_PRICE_25FLASH_IN  || 0.30), out: Number(process.env.GEMINI_PRICE_25FLASH_OUT  || 2.50) },
+  'gemini-2.5-flash-lite':    { in: Number(process.env.GEMINI_PRICE_25LITE_IN   || 0.10), out: Number(process.env.GEMINI_PRICE_25LITE_OUT   || 0.40) },
 };
 
-// build-bust: tier-system-v1
 const COMPLEX_KEYWORDS = [
   '신청', '등록해', '작성해', '만들어', '추가해',
   '분석', '요약', '초안', '견적서', '제안서',
@@ -46,28 +53,30 @@ const COMPLEX_KEYWORDS = [
   'create', 'analyze', 'summarize',
 ];
 
-// 견적 요청 키워드 — 매칭 시 출력 토큰 한도 상향 (라인별 계산이 잘리지 않도록)
 const QUOTE_KEYWORDS = ['견적', '얼마', '예산', '얼만큼', '비용'];
 
-function selectModel({ isAdmin, lastText, conversationLength }) {
-  if (isAdmin) return MODEL_FLASH;
-  if (conversationLength > 6) return MODEL_FLASH;
+// 1초 내 즉시 판단 — 어려운 질문이면 HIGH 체인, 단순 안내면 LOW 체인
+function selectChain({ isAdmin, lastText, conversationLength }) {
+  if (isAdmin) return { chain: MODEL_CHAIN_HIGH, level: 'high', reason: 'admin' };
+  if (conversationLength > 6) return { chain: MODEL_CHAIN_HIGH, level: 'high', reason: 'long_conv' };
   const text = (lastText || '').toLowerCase();
-  if (COMPLEX_KEYWORDS.some((k) => text.includes(k.toLowerCase()))) return MODEL_FLASH;
-  return MODEL_LITE;
+  if (COMPLEX_KEYWORDS.some((k) => text.includes(k.toLowerCase()))) {
+    return { chain: MODEL_CHAIN_HIGH, level: 'high', reason: 'complex_keyword' };
+  }
+  return { chain: MODEL_CHAIN_LOW, level: 'low', reason: 'simple' };
 }
 
-function maxTokensFor({ isAdmin, model, lastText }) {
-  if (isAdmin) return 800;
+function maxTokensFor({ isAdmin, level, lastText }) {
+  if (isAdmin) return 1000;
   // 견적 요청은 라인별 계산이 잘리지 않도록 상향
   const isQuote = QUOTE_KEYWORDS.some((k) => (lastText || '').includes(k));
-  if (isQuote) return 900;
-  return model === MODEL_FLASH ? 500 : 250;
+  if (isQuote) return 800;
+  return level === 'high' ? 600 : 350;
 }
 
 function estimateCostUsd(model, usage) {
-  const p = PRICING[model];
-  if (!p || !usage) return 0;
+  const p = PRICING[model] || PRICING['gemini-2.5-flash-lite']; // 미등록 모델은 lite 단가로 추정
+  if (!usage) return 0;
   const cached    = usage.cachedContentTokenCount || 0;
   const total     = usage.promptTokenCount        || 0;
   const nonCached = Math.max(0, total - cached);
@@ -182,20 +191,22 @@ export default async (req) => {
   }
   const collapsed = collapseTurns(contents);
 
-  const model = selectModel({
+  const { chain, level, reason } = selectChain({
     isAdmin,
     lastText: last.text,
     conversationLength: messages.length,
   });
-  const maxOutputTokens = maxTokensFor({ isAdmin, model, lastText: last.text });
+  const model = chain[0]; // 체인의 1차 모델 — 실패 시 callGeminiWithChain이 다음으로 폴백
+  const maxOutputTokens = maxTokensFor({ isAdmin, level, lastText: last.text });
   const routing = {
-    tier: model === MODEL_FLASH ? 'flash' : 'lite',
+    tier: level,
+    chain,
     maxOutputTokens,
-    reason: isAdmin ? 'admin' : (messages.length > 6 ? 'long_conv' : (model === MODEL_FLASH ? 'complex_keyword' : 'simple')),
+    reason,
   };
 
-  // 🛠 Function Calling — Flash로 라우팅된 경우만 도구 첨부 (Lite는 FC 미지원 가능성)
-  const tools = (model === MODEL_FLASH)
+  // 🛠 Function Calling — HIGH 체인(어려운 질문)에만 도구 첨부 (LOW는 단순 안내라 도구 불필요)
+  const tools = (level === 'high')
     ? [{ functionDeclarations: getToolDeclarations({ isAdmin }) }]
     : undefined;
 
@@ -206,6 +217,7 @@ export default async (req) => {
       systemInstruction: { parts: [{ text: staticPrompt }] },
       tools,
       model,
+      chain,
       maxOutputTokens,
       routing,
       cacheKey,
@@ -242,33 +254,48 @@ function sseEnqueue(controller, type, data) {
   controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ type, ...data })}\n\n`));
 }
 
-// 🛡 일시적 upstream 장애 (503/429/5xx) 흡수
-// 1차 실패: 같은 모델 400ms backoff 후 1회 재시도
-// 2차 실패 & Flash였으면: Lite로 자동 폴백 (Flash보다 큐 여유가 보통 더 큼)
+// 🛡 일시적 upstream 장애 (503/429/5xx) 흡수 — 체인 순서대로 모델 폴백
+// 첫 모델 실패 → 200ms backoff → 다음 모델 시도 → 반복
 const RETRYABLE_STATUSES = new Set([429, 500, 502, 503, 504]);
-const RETRY_BACKOFF_MS = 400;
+const RETRY_BACKOFF_MS = 200;
 
-async function callGeminiWithFallback(args) {
-  let resp = await callGemini(args);
-  let usedModel = args.model;
-  let degraded = false;
-
-  if (!resp.ok && RETRYABLE_STATUSES.has(resp.status)) {
-    try { await resp.text(); } catch {}
-    console.warn(`[gemini] ${resp.status} retry-1 same model=${args.model}`);
-    await new Promise((r) => setTimeout(r, RETRY_BACKOFF_MS));
-    resp = await callGemini(args);
-
-    if (!resp.ok && RETRYABLE_STATUSES.has(resp.status) && args.model !== MODEL_LITE) {
-      try { await resp.text(); } catch {}
-      console.warn(`[gemini] ${resp.status} retry-2 fallback ${args.model}→${MODEL_LITE}`);
-      await new Promise((r) => setTimeout(r, RETRY_BACKOFF_MS));
-      resp = await callGemini({ ...args, model: MODEL_LITE });
-      usedModel = MODEL_LITE;
-      degraded = true;
-    }
+async function callGeminiWithChain(args, chain) {
+  if (!Array.isArray(chain) || !chain.length) {
+    // 체인 비어있으면 단발 호출
+    const resp = await callGemini(args);
+    return { response: resp, usedModel: args.model, attemptedModels: [args.model], degraded: false };
   }
-  return { response: resp, usedModel, degraded };
+
+  const attempted = [];
+  let lastResp = null;
+  for (let i = 0; i < chain.length; i++) {
+    const model = chain[i];
+    attempted.push(model);
+    if (i > 0) await new Promise((r) => setTimeout(r, RETRY_BACKOFF_MS));
+
+    let resp;
+    try {
+      resp = await callGemini({ ...args, model });
+    } catch (e) {
+      console.warn(`[gemini-chain] ${model} threw: ${e?.message}`);
+      lastResp = null;
+      continue; // 네트워크 에러도 다음 모델로
+    }
+
+    if (resp.ok) {
+      return { response: resp, usedModel: model, attemptedModels: attempted, degraded: i > 0 };
+    }
+    // 재시도 가능한 상태면 다음 모델로, 아니면 즉시 반환 (4xx 등은 다음 모델도 동일 결과)
+    if (!RETRYABLE_STATUSES.has(resp.status)) {
+      console.warn(`[gemini-chain] ${model} ${resp.status} non-retryable, stopping chain`);
+      return { response: resp, usedModel: model, attemptedModels: attempted, degraded: i > 0 };
+    }
+    try { await resp.text(); } catch {}
+    console.warn(`[gemini-chain] ${model} ${resp.status} → 다음 모델로`);
+    lastResp = resp;
+  }
+  // 체인 모두 실패 — 마지막 응답 반환
+  return { response: lastResp, usedModel: attempted[attempted.length - 1], attemptedModels: attempted, degraded: true };
 }
 
 async function callGemini({ model, contents, systemInstruction, tools, maxOutputTokens }) {
@@ -355,7 +382,7 @@ function summarizeToolResult(result) {
   return '완료';
 }
 
-function runAgentStream({ initialContents, systemInstruction, tools, model, maxOutputTokens, routing, cacheKey, isAdmin }) {
+function runAgentStream({ initialContents, systemInstruction, tools, model, chain, maxOutputTokens, routing, cacheKey, isAdmin }) {
   let contents = initialContents;
   const allTextParts = [];
   const allToolCalls = [];
@@ -363,7 +390,8 @@ function runAgentStream({ initialContents, systemInstruction, tools, model, maxO
   let lastFinishReason = null;
   const startedAt = Date.now();
   let activeModel = model;
-  let degradedToLite = false;
+  let degradedFromChain = false;
+  const attemptedModels = new Set();
 
   return new ReadableStream({
     async start(controller) {
@@ -386,17 +414,27 @@ function runAgentStream({ initialContents, systemInstruction, tools, model, maxO
 
           let upstream;
           try {
-            const wrapped = await callGeminiWithFallback({ model: activeModel, contents, systemInstruction: iterSystem, tools: iterTools, maxOutputTokens });
+            // Iter 2+에선 첫 모델만 사용 (이미 도구 결과 받았으니 빨리 마무리)
+            // Iter 0(도구 호출)에선 전체 체인 폴백 활성
+            const iterChain = isFirstIter ? chain : [activeModel];
+            const wrapped = await callGeminiWithChain(
+              { contents, systemInstruction: iterSystem, tools: iterTools, maxOutputTokens },
+              iterChain
+            );
             upstream = wrapped.response;
-            if (wrapped.degraded && !degradedToLite) {
-              degradedToLite = true;
-              activeModel = wrapped.usedModel;
-              sseEnqueue(controller, 'tool_result', { name: '_model_fallback', summary: `Flash 폭주 → Lite 자동 폴백` });
-            } else {
-              activeModel = wrapped.usedModel;
+            wrapped.attemptedModels?.forEach((m) => attemptedModels.add(m));
+            if (wrapped.degraded && wrapped.usedModel !== model && !degradedFromChain) {
+              degradedFromChain = true;
+              sseEnqueue(controller, 'tool_result', { name: '_model_fallback', summary: `${model} 실패 → ${wrapped.usedModel}로 폴백` });
             }
+            activeModel = wrapped.usedModel || activeModel;
           } catch (e) {
             sseEnqueue(controller, 'error', { error: 'Gemini API 호출 실패', detail: String(e?.message || e) });
+            controller.close();
+            return;
+          }
+          if (!upstream) {
+            sseEnqueue(controller, 'error', { error: '모델 체인 전체 실패', detail: `attempted: ${[...attemptedModels].join(', ')}` });
             controller.close();
             return;
           }
@@ -427,7 +465,13 @@ function runAgentStream({ initialContents, systemInstruction, tools, model, maxO
             const doneBody = {
               answer: accumulated,
               model: activeModel,
-              routing: { ...routing, iterations: iter + 1, toolCallCount: allToolCalls.length, degraded: degradedToLite || undefined },
+              routing: {
+                ...routing,
+                iterations: iter + 1,
+                toolCallCount: allToolCalls.length,
+                degraded: degradedFromChain || undefined,
+                attemptedModels: attemptedModels.size > 1 ? [...attemptedModels] : undefined,
+              },
               finishReason: lastFinishReason,
               tokens: {
                 in:     totalUsage.in     || null,
