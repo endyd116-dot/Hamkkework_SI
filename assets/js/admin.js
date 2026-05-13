@@ -5,6 +5,7 @@
 import { store, ensureSeed, verifyPassword } from './store.js';
 import { $, $$, toast, escapeHtml } from './admin-ui.js';
 import * as Views from './admin-views.js';
+import { initAdminNotifications, requestNotifyPermission, notifyPermissionState } from './admin-notify.js';
 
 await ensureSeed();
 
@@ -31,6 +32,36 @@ function showAdmin() {
     $('#userName').textContent = a.name || '관리자';
     $('#userAvatar').textContent = (a.name || a.email).charAt(0).toUpperCase();
   }
+  // 🔔 브라우저 알림 초기화 (어드민 로그인 시)
+  initAdminNotifications();
+  maybeOfferNotifyPermission();
+}
+
+// 첫 로그인 후 알림 권한 안 받았으면 토스트 + 버튼으로 권한 요청
+function maybeOfferNotifyPermission() {
+  const state = notifyPermissionState();
+  if (state !== 'default') return; // 이미 허용/거부
+  if (sessionStorage.getItem('notifyOffered')) return; // 세션당 1회만
+  sessionStorage.setItem('notifyOffered', '1');
+  setTimeout(() => {
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'position:fixed;bottom:80px;right:24px;background:#fff;border:1.5px solid var(--cobalt,#0866ff);border-radius:12px;padding:14px 16px;box-shadow:0 12px 32px rgba(0,0,0,.15);z-index:9999;max-width:300px;font-size:13px;line-height:1.5';
+    wrap.innerHTML = `
+      <div style="font-weight:700;margin-bottom:6px">🔔 알림 켜기</div>
+      <div style="color:#555;margin-bottom:10px">새 콜백·긴급 요청 발생 시 브라우저 알림으로 받으시겠어요?</div>
+      <div style="display:flex;gap:8px">
+        <button id="notifyYes" style="flex:1;background:var(--cobalt,#0866ff);color:#fff;border:none;padding:8px;border-radius:6px;cursor:pointer;font-weight:600;font-size:13px">허용</button>
+        <button id="notifyNo" style="flex:1;background:#f3f4f6;color:#555;border:none;padding:8px;border-radius:6px;cursor:pointer;font-size:13px">나중에</button>
+      </div>
+    `;
+    document.body.appendChild(wrap);
+    wrap.querySelector('#notifyYes').addEventListener('click', async () => {
+      const ok = await requestNotifyPermission();
+      wrap.remove();
+      toast(ok ? '🔔 알림이 켜졌습니다' : '알림 권한이 거부되었습니다', ok ? 'success' : 'error');
+    });
+    wrap.querySelector('#notifyNo').addEventListener('click', () => wrap.remove());
+  }, 2500);
 }
 
 $('#loginForm')?.addEventListener('submit', async (e) => {

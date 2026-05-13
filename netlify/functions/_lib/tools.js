@@ -599,6 +599,149 @@ export const TOOL_CATALOG = {
   },
 
   // ─────────────────────────────────────────────────────────
+  // 견적서 생성 (create_quote) — 자연어로 견적서 quotes 컬렉션에 추가
+  // ─────────────────────────────────────────────────────────
+  create_quote: {
+    adminOnly: true,
+    declaration: {
+      name: 'create_quote',
+      description: 'Create a quote record in quotes collection. Use when admin says "정수민 견적서 만들어줘", "○○ 프로젝트 견적 등록해줘". Required: clientName, items[], total. Optional: leadId, title, notes.',
+      parameters: {
+        type: 'object',
+        required: ['clientName', 'items', 'total'],
+        properties: {
+          clientName: { type: 'string', description: '클라이언트(고객) 이름' },
+          title: { type: 'string', description: '프로젝트 제목 (예: 학원 인원관리 시스템 MVP)' },
+          items: {
+            type: 'array',
+            description: '견적 라인 항목 배열',
+            items: {
+              type: 'object',
+              properties: {
+                label: { type: 'string', description: '항목명 (예: 페이지 단순 10개)' },
+                amount: { type: 'number', description: '만원 단위 금액' },
+              },
+            },
+          },
+          total: { type: 'number', description: '총 합계 (만원 단위, 오버헤드 포함)' },
+          overhead: { type: 'number', description: '오버헤드 비율 % (default 25)' },
+          tier: { type: 'string', description: 'mvp|small|medium|large' },
+          notes: { type: 'string', description: '특이사항·가정' },
+          leadId: { type: 'string', description: '관련 리드 id (선택)' },
+          status: { type: 'string', description: 'ai-draft|reviewed|sent|accepted|rejected (default ai-draft)' },
+        },
+      },
+    },
+    async handler({ clientName, title, items, total, overhead, tier, notes, leadId, status }) {
+      if (!clientName || !clientName.trim()) return { error: 'clientName_required' };
+      if (!Array.isArray(items) || items.length === 0) return { error: 'items_required' };
+      if (typeof total !== 'number' || total <= 0) return { error: 'total_invalid' };
+      const quotes = await readCollection('quotes');
+      const newQuote = {
+        id: 'quote_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+        clientName: String(clientName).trim(),
+        title: (title || `${clientName}님 견적`).trim(),
+        items: items.map((it) => ({
+          label: String(it.label || '').trim(),
+          amount: Number(it.amount) || 0,
+        })).filter((it) => it.label),
+        total: Math.round(Number(total)),
+        overhead: Number(overhead) || 25,
+        tier: tier || null,
+        notes: (notes || '').trim(),
+        leadId: leadId || null,
+        status: status || 'ai-draft',
+        createdAt: new Date().toISOString(),
+        createdBy: 'ai',
+      };
+      quotes.unshift(newQuote);
+      await writeCollection('quotes', quotes);
+      return {
+        ok: true,
+        id: newQuote.id,
+        title: newQuote.title,
+        total: newQuote.total,
+        itemCount: newQuote.items.length,
+        note: '어드민 페이지 > 견적서 메뉴에서 검토 후 PDF 출력·메일 발송 가능합니다.',
+      };
+    },
+  },
+
+  // ─────────────────────────────────────────────────────────
+  // 이메일 드래프트 발송 완료 표시 (mark_email_sent)
+  // PM이 mailto로 직접 보낸 후 챗봇에 알릴 때 사용
+  // ─────────────────────────────────────────────────────────
+  mark_email_sent: {
+    adminOnly: true,
+    declaration: {
+      name: 'mark_email_sent',
+      description: 'Mark an email draft as sent. Use when admin says "방금 메일 보냈어, 발송 완료 표시해줘" / "○○ 메일 발송됨".',
+      parameters: {
+        type: 'object',
+        required: ['id'],
+        properties: {
+          id: { type: 'string', description: 'emailDrafts.id' },
+          note: { type: 'string', description: '발송 메모 (선택)' },
+        },
+      },
+    },
+    async handler({ id, note }) {
+      if (!id) return { error: 'id_required' };
+      const drafts = await readCollection('emailDrafts');
+      const idx = drafts.findIndex((d) => d.id === id);
+      if (idx < 0) return { error: 'draft_not_found', id };
+      drafts[idx] = {
+        ...drafts[idx],
+        status: 'sent',
+        sentAt: new Date().toISOString(),
+        sentBy: 'pm-via-bot',
+        sentNote: note || '',
+      };
+      await writeCollection('emailDrafts', drafts);
+      return {
+        ok: true,
+        id,
+        to: drafts[idx].to,
+        subject: drafts[idx].subject,
+        note: '발송 완료로 표시했습니다.',
+      };
+    },
+  },
+
+  // ─────────────────────────────────────────────────────────
+  // 작업 삭제 (delete_task) — 콜백/팔로업 취소
+  // ─────────────────────────────────────────────────────────
+  delete_task: {
+    adminOnly: true,
+    declaration: {
+      name: 'delete_task',
+      description: 'Delete a task from scheduledTasks. Use for cancellation. Differs from tasks_update which marks status; this removes entirely. Use when admin says "○○ 콜백 취소"/"삭제해줘".',
+      parameters: {
+        type: 'object',
+        required: ['id'],
+        properties: {
+          id: { type: 'string', description: 'scheduledTasks.id' },
+          reason: { type: 'string', description: '취소 사유 (선택, 로그용)' },
+        },
+      },
+    },
+    async handler({ id, reason }) {
+      if (!id) return { error: 'id_required' };
+      const tasks = await readCollection('scheduledTasks');
+      const target = tasks.find((t) => t.id === id);
+      if (!target) return { error: 'task_not_found', id };
+      const remaining = tasks.filter((t) => t.id !== id);
+      await writeCollection('scheduledTasks', remaining);
+      console.log(`[delete_task] removed ${id} (${target.leadName}) reason=${reason || ''}`);
+      return {
+        ok: true,
+        deleted: { id, leadName: target.leadName, type: target.type },
+        reason: reason || null,
+      };
+    },
+  },
+
+  // ─────────────────────────────────────────────────────────
   // 이메일 발송 — Resend 연동 (없으면 drafts에 저장 → PM 수동 발송)
   // ─────────────────────────────────────────────────────────
   send_email: {

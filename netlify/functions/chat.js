@@ -791,6 +791,9 @@ Netlify Blobs DB의 실제 데이터 조회/변경. AI가 functionCall로 호출
 - "예상 매출/파이프라인 분석/이번달 매출 예측/수주 예상" → revenue_forecast (horizon=month|quarter)
 - "자주 묻는 질문 캐싱/AI 비용 줄여줘/frozen 후보 찾아줘" → frozen_response_suggest (since=30d 기본)
 - "그 후보 추가해줘/frozen으로 저장해줘" → frozen_response_create (PM 동의 후 호출)
+- "○○ 견적서 만들어줘/견적서 등록해줘" → create_quote (clientName/items/total 필수)
+- "○○ 메일 발송 완료 표시/방금 보냈어" → mark_email_sent (emailDrafts.id 필요)
+- "○○ 콜백 취소/작업 삭제/취소해줘" → delete_task (status 변경이 아니라 완전 삭제 시)
 
 ## 📧 이메일 발송 (send_email) 사용 가이드
 - 이메일 본문은 운영자가 별도 검수 없이 그대로 발송될 수 있으므로 **공손한 한국어 + 회사 시그니처** 포함:
