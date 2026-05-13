@@ -234,6 +234,35 @@ function sseEnqueue(controller, type, data) {
   controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ type, ...data })}\n\n`));
 }
 
+// 🛡 일시적 upstream 장애 (503/429/5xx) 흡수
+// 1차 실패: 같은 모델 400ms backoff 후 1회 재시도
+// 2차 실패 & Flash였으면: Lite로 자동 폴백 (Flash보다 큐 여유가 보통 더 큼)
+const RETRYABLE_STATUSES = new Set([429, 500, 502, 503, 504]);
+const RETRY_BACKOFF_MS = 400;
+
+async function callGeminiWithFallback(args) {
+  let resp = await callGemini(args);
+  let usedModel = args.model;
+  let degraded = false;
+
+  if (!resp.ok && RETRYABLE_STATUSES.has(resp.status)) {
+    try { await resp.text(); } catch {}
+    console.warn(`[gemini] ${resp.status} retry-1 same model=${args.model}`);
+    await new Promise((r) => setTimeout(r, RETRY_BACKOFF_MS));
+    resp = await callGemini(args);
+
+    if (!resp.ok && RETRYABLE_STATUSES.has(resp.status) && args.model !== MODEL_LITE) {
+      try { await resp.text(); } catch {}
+      console.warn(`[gemini] ${resp.status} retry-2 fallback ${args.model}→${MODEL_LITE}`);
+      await new Promise((r) => setTimeout(r, RETRY_BACKOFF_MS));
+      resp = await callGemini({ ...args, model: MODEL_LITE });
+      usedModel = MODEL_LITE;
+      degraded = true;
+    }
+  }
+  return { response: resp, usedModel, degraded };
+}
+
 async function callGemini({ model, contents, systemInstruction, tools, maxOutputTokens }) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:streamGenerateContent?alt=sse`;
   return fetch(url, {
@@ -323,6 +352,8 @@ function runAgentStream({ initialContents, systemInstruction, tools, model, maxO
   const totalUsage = { in: 0, out: 0, cached: 0 };
   let lastFinishReason = null;
   const startedAt = Date.now();
+  let activeModel = model;
+  let degradedToLite = false;
 
   return new ReadableStream({
     async start(controller) {
@@ -345,7 +376,15 @@ function runAgentStream({ initialContents, systemInstruction, tools, model, maxO
 
           let upstream;
           try {
-            upstream = await callGemini({ model, contents, systemInstruction: iterSystem, tools: iterTools, maxOutputTokens });
+            const wrapped = await callGeminiWithFallback({ model: activeModel, contents, systemInstruction: iterSystem, tools: iterTools, maxOutputTokens });
+            upstream = wrapped.response;
+            if (wrapped.degraded && !degradedToLite) {
+              degradedToLite = true;
+              activeModel = wrapped.usedModel;
+              sseEnqueue(controller, 'tool_result', { name: '_model_fallback', summary: `Flash 폭주 → Lite 자동 폴백` });
+            } else {
+              activeModel = wrapped.usedModel;
+            }
           } catch (e) {
             sseEnqueue(controller, 'error', { error: 'Gemini API 호출 실패', detail: String(e?.message || e) });
             controller.close();
@@ -370,15 +409,15 @@ function runAgentStream({ initialContents, systemInstruction, tools, model, maxO
           // function call 없음 → 응답 완료
           if (functionCalls.length === 0) {
             const accumulated = allTextParts.join('').trim() || '죄송합니다. 응답을 생성하지 못했습니다.';
-            const costUsd = estimateCostUsd(model, {
+            const costUsd = estimateCostUsd(activeModel, {
               promptTokenCount: totalUsage.in,
               candidatesTokenCount: totalUsage.out,
               cachedContentTokenCount: totalUsage.cached,
             });
             const doneBody = {
               answer: accumulated,
-              model,
-              routing: { ...routing, iterations: iter + 1, toolCallCount: allToolCalls.length },
+              model: activeModel,
+              routing: { ...routing, iterations: iter + 1, toolCallCount: allToolCalls.length, degraded: degradedToLite || undefined },
               finishReason: lastFinishReason,
               tokens: {
                 in:     totalUsage.in     || null,
