@@ -1274,6 +1274,142 @@ function closePanel() {
   isOpen = false;
 }
 
+/* ============================================================
+   💾 대화 저장 기능 — 사용자가 상담 내역을 보관할 수 있게
+   - 파일 다운로드 (.txt)
+   - 클립보드 복사
+   - 이메일로 받기 (mailto:)
+   ============================================================ */
+function formatConversationAsText() {
+  const lines = [];
+  const settings = store.settings.get() || {};
+  const brand = settings.brand || '함께워크_SI';
+  const phone = settings.phone || '';
+  const email = settings.email || '';
+  const pm = settings.pm || '박두용';
+  const dateStr = new Date().toLocaleString('ko-KR');
+
+  lines.push('──────────────────────────────');
+  lines.push(`${brand} AI 상담 내역`);
+  lines.push(`저장 시각: ${dateStr}`);
+  lines.push(`세션 ID: ${sessionId}`);
+  lines.push('──────────────────────────────');
+  lines.push('');
+
+  for (const m of conversation) {
+    const role = m.role === 'user' ? '👤 본인' : '🤖 함께워크 AI';
+    const time = m.at
+      ? new Date(m.at).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })
+      : '';
+    // ```action JSON 블록은 내부 도구 호출이라 사용자 저장본에선 제거
+    const cleaned = String(m.text || '')
+      .replace(/```action[\s\S]*?```/g, '')
+      .trim();
+    if (!cleaned) continue;
+    lines.push(`[${time}] ${role}`);
+    lines.push(cleaned);
+    lines.push('');
+  }
+
+  lines.push('──────────────────────────────');
+  lines.push(`추가 상담 — ${pm} PM`);
+  if (phone) lines.push(`📞 ${phone}`);
+  if (email) lines.push(`📧 ${email}`);
+  lines.push(`🌐 ${location.origin}/#contact`);
+  lines.push('──────────────────────────────');
+  return lines.join('\n');
+}
+
+function downloadConversation() {
+  const text = formatConversationAsText();
+  const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  const dateStr = new Date().toISOString().slice(0, 10);
+  a.download = `함께워크_SI_상담내역_${dateStr}.txt`;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => { a.remove(); URL.revokeObjectURL(url); }, 100);
+  window.showToast?.('상담 내역 파일이 저장되었습니다');
+}
+
+async function copyConversation() {
+  const text = formatConversationAsText();
+  let ok = false;
+  try {
+    await navigator.clipboard.writeText(text);
+    ok = true;
+  } catch {
+    // fallback: textarea select + execCommand
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.cssText = 'position:fixed;top:0;left:0;opacity:0';
+    document.body.appendChild(ta);
+    ta.select();
+    try { ok = document.execCommand('copy'); } catch {}
+    ta.remove();
+  }
+  window.showToast?.(ok ? '클립보드에 복사되었습니다' : '복사에 실패했어요');
+}
+
+function emailConversation() {
+  const text = formatConversationAsText();
+  const subject = encodeURIComponent(`${store.settings.get()?.brand || '함께워크_SI'} AI 상담 내역`);
+  // mailto body는 URL encoding 길이 제한이 있어 본문이 너무 길면 잘릴 수 있음. 대화 30턴 정도면 OK.
+  const body = encodeURIComponent(text.slice(0, 8000));
+  window.location.href = `mailto:?subject=${subject}&body=${body}`;
+}
+
+function initSaveMenu() {
+  const closeBtnEl = document.getElementById('chatbotClose');
+  if (!closeBtnEl || document.getElementById('chatbotSaveBtn')) return;
+
+  const saveBtn = document.createElement('button');
+  saveBtn.id = 'chatbotSaveBtn';
+  saveBtn.className = 'chatbot-save';
+  saveBtn.setAttribute('aria-label', '상담 내역 저장');
+  saveBtn.title = '상담 내역 저장';
+  saveBtn.innerHTML = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>`;
+  closeBtnEl.parentNode.insertBefore(saveBtn, closeBtnEl);
+
+  const menu = document.createElement('div');
+  menu.id = 'chatbotSaveMenu';
+  menu.className = 'chatbot-save-menu';
+  menu.innerHTML = `
+    <button type="button" data-act="download"><span>📄</span> 파일로 저장 (.txt)</button>
+    <button type="button" data-act="copy"><span>📋</span> 클립보드에 복사</button>
+    <button type="button" data-act="email"><span>📧</span> 이메일로 받기</button>
+  `;
+  panel.appendChild(menu);
+
+  saveBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (conversation.length === 0) {
+      window.showToast?.('저장할 대화가 없습니다');
+      return;
+    }
+    menu.classList.toggle('open');
+  });
+
+  menu.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-act]');
+    if (!btn) return;
+    const act = btn.dataset.act;
+    menu.classList.remove('open');
+    if (act === 'download') downloadConversation();
+    else if (act === 'copy') copyConversation();
+    else if (act === 'email') emailConversation();
+  });
+
+  // 패널 밖 클릭 시 메뉴 닫기
+  document.addEventListener('click', (e) => {
+    if (!menu.classList.contains('open')) return;
+    if (e.target.closest('#chatbotSaveBtn') || e.target.closest('#chatbotSaveMenu')) return;
+    menu.classList.remove('open');
+  });
+}
+
 function wire() {
   if (!fab) return;
   fab.addEventListener('click', openPanel);
@@ -1289,6 +1425,7 @@ function wire() {
   suggestionsEl?.querySelectorAll('.chat-suggestion').forEach((btn) => {
     btn.addEventListener('click', () => send(btn.textContent.trim()));
   });
+  initSaveMenu();
 }
 
 document.addEventListener('DOMContentLoaded', wire);
