@@ -286,6 +286,24 @@ async function executeAction(action) {
     // 1. create_lead — DB CRUD: directly insert into admin
     // ====================================================
     case 'create_lead': {
+      // 🛡 예시/placeholder 데이터 거절 — AI가 시스템 프롬프트 예시값으로 호출하는 케이스
+      const fakeNames = [/^김민수$/, /^홍길동$/, /^고객님?$/i, /^<.*>$/];
+      const fakeEmails = [/^a@b\.com$/i, /^test@/i, /^<.*>$/, /^이메일/i];
+      const fakePhones = [/^010-?1234-?5678$/, /^<.*>$/, /^전화/];
+      const isFakeName = fakeNames.some((re) => re.test(String(data.name || '').trim()));
+      const isFakeEmail = data.email && fakeEmails.some((re) => re.test(String(data.email).trim()));
+      const isFakePhone = data.phone && fakePhones.some((re) => re.test(String(data.phone).trim()));
+      if (!data.name || isFakeName || isFakeEmail || isFakePhone) {
+        return {
+          ok: false,
+          message: '실제로 알려주신 이름과 연락처가 필요해요. 다시 한 번 말씀해 주시겠어요?',
+        };
+      }
+      // 이메일 형식 최소 검증 (@ 있어야)
+      if (data.email && !/@.+\..+/.test(String(data.email).trim())) {
+        return { ok: false, message: '이메일 형식을 다시 확인해 주세요 (예: name@domain.com)' };
+      }
+
       const lead = store.leads.add({
         name: data.name?.trim() || '',
         email: data.email?.trim() || '',
@@ -620,11 +638,13 @@ async function executeAction(action) {
       if (!data.name || !data.contact || !data.method) {
         return { ok: false, message: '이름·연락처·방법(phone/email/kakao)이 필요합니다' };
       }
-      // 🛡 placeholder 거절 — AI가 정보 없이 "고객님", "이메일 또는 전화번호" 같은 텍스트로 호출하는 케이스
+      // 🛡 placeholder/예시 데이터 거절 — AI가 정보 없이 또는 시스템 프롬프트 예시값으로 호출하는 케이스
       const placeholderPatterns = [
         /^고객님?$/i, /^이름$/i, /^이메일/i, /^전화번호/i, /^연락처/i,
         /이메일.*또는.*전화/, /전화.*또는.*이메일/,
         /^placeholder/i, /^example/i, /TBD/i,
+        /^<.*>$/, // <사용자가 말한 이름> 같은 placeholder
+        /^김민수$/, /^홍길동$/, /^a@b\.com$/i, /^test@/i, /^010-?1234-?5678$/, // 예시값
       ];
       const isPlaceholder = (s) => placeholderPatterns.some((re) => re.test(String(s).trim()));
       if (isPlaceholder(data.name) || isPlaceholder(data.contact)) {
