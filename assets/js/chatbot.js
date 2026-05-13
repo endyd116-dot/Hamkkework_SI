@@ -1246,7 +1246,7 @@ async function send(question) {
     usedFallback = true;
 
     // 🛡 안전망: 사용자 마지막 3개 메시지에서 직접 정보 추출
-    // 이름 + 연락처가 모두 있으면 콜백 요청으로 자동 등록 (PM에게 손실 방지)
+    // contact(전화/이메일)만 있어도 콜백 요청 등록 (이름은 후속 1턴 요청)
     try {
       const recentUserText = conversation
         .filter((m) => m.role === 'user')
@@ -1254,32 +1254,38 @@ async function send(question) {
         .map((m) => m.text)
         .join(' ') + ' ' + q;
       const info = extractContactInfo(recentUserText);
+      const contact = info.phone || info.email;
 
-      if (info.name && (info.phone || info.email)) {
+      if (contact) {
         const method = info.phone ? 'phone' : 'email';
-        const contact = info.phone || info.email;
+        const leadName = info.name || '(이름 미기재)';
         store.scheduledTasks.add({
           type: 'callback_request',
-          leadName: info.name,
+          leadName,
           contact,
           method,
           preferredTime: info.time || '',
-          topic: '챗봇 상담 (AI 응답 실패 시 자동 추출)',
+          topic: info.name
+            ? '챗봇 상담 (AI 응답 실패 시 자동 추출)'
+            : '챗봇 상담 (이름 미기재 — 추가 확인 필요)',
           urgency: 'normal',
           status: 'pending',
           scheduledAt: new Date().toISOString(),
           sessionId,
           aiSubmitted: true,
-          autoExtracted: true, // 어드민이 확인할 수 있게 표시
+          autoExtracted: true,
+          needsNameFollowup: !info.name, // 어드민이 식별 — 이름 후속 확인 필요
         });
         autoExtractedFallback = {
-          name: info.name,
+          name: info.name || null,
           contact,
           method,
           preferredTime: info.time,
         };
-        // 친화 메시지로 교체 (인텐트 fallback 텍스트보다 우선)
-        rawAnswer = `✅ ${info.name}님, 박두용 PM에게 정확히 전달했습니다 (${contact}${info.time ? ` · ${info.time} 연락 요청` : ''}). 곧 직접 연락드릴게요!`;
+        // 이름이 있으면 완전한 확인, 없으면 이름 추가 요청
+        rawAnswer = info.name
+          ? `✅ ${info.name}님, 박두용 PM에게 정확히 전달했습니다 (${contact}${info.time ? ` · ${info.time} 연락 요청` : ''}). 곧 직접 연락드릴게요!`
+          : `✅ 연락처 받았습니다 (${contact}${info.time ? ` · ${info.time} 연락 요청` : ''}). PM이 연락드릴 때 호칭하기 좋게 **성함**도 알려주시겠어요?`;
       }
     } catch (extractErr) {
       console.warn('[chatbot] auto-extract failed', extractErr);

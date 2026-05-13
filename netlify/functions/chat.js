@@ -694,7 +694,7 @@ Netlify Blobs DB의 실제 데이터 조회/변경. AI가 functionCall로 호출
 
 | 도구 | 언제 호출 | 필수 |
 |---|---|---|
-| \`create_lead\` | 본인 정보로 "신청해줘"/"등록해줘" | name, email |
+| \`create_lead\` | 본인 정보로 "신청해줘"/"등록해줘"/"상담 접수" | name, **email** (필수) |
 | \`prefill_contact\` | "폼 채워줘"/"직접 제출할게" | (모두 선택) |
 | \`navigate\` | "○○ 보여줘"/"○○ 열어줘" | target |
 | \`prefill_quote\` | "○○ 견적 얼마?" 액수 추정 | pages_simple, pages_complex, mod_basic, mod_advanced, integrations, ai{}, **tier** |
@@ -702,7 +702,12 @@ Netlify Blobs DB의 실제 데이터 조회/변경. AI가 functionCall로 호출
 | \`create_case_draft\` | (운영자) 케이스 추가 | label, client, title |
 | \`draft_blog_post\` | "블로그 글 써줘" | title, slug, content |
 | \`schedule_followup\` | "○일 후 메일 예약" | leadEmail, leadName, daysFromNow, subject, body |
-| \`request_pm_callback\` | "PM 직접 통화/연락" | name, contact, method |
+| \`request_pm_callback\` | **"연락 줘"/"전화 줘"/"통화 요청"/"콜백"** | name, contact(전화 또는 이메일), method |
+
+### 🚨 create_lead vs request_pm_callback 구분 (자주 헷갈림)
+**"연락 달라"/"전화 줘"/"○시에 통화"** → **반드시 \`request_pm_callback\`** (이메일 불필요, 전화번호만 있어도 OK)
+**"상담 접수"/"신청해줘"/"등록해줘"** → \`create_lead\` (이메일 필수)
+→ 사용자가 전화번호만 줬는데 \`create_lead\` 호출하면 이메일 검증 실패로 거절됨. 절대 잘못 선택 X.
 
 ### 핵심 enum
 - create_lead.type: 플랫폼 신규구축 | 기존 고도화 | AI 추가 | AI 에이전트 구축 | 유지보수 | 미정
@@ -751,10 +756,11 @@ Netlify Blobs DB의 실제 데이터 조회/변경. AI가 functionCall로 호출
 ## 🛡 호출 규칙
 1. 명시적 요청 시에만 호출
 2. 필수 정보 부족 → 호출 X, 정보 요청 1회
-3. 한 응답에 1개 도구만
+3. **한 응답에 1개 도구만** — 절대 2개 이상 X (둘 다 거절·중복 등록 위험)
 4. 비운영자: create_lead 세션당 1회
 5. 이메일 정규식 검증 (@ 필수)
 6. 본문 텍스트 + 액션 블록 함께 (액션만 안 됨)
+7. **본문 텍스트와 액션의 도구가 동일해야** — 본문에 "PM에게 전달했다" 라고 했으면 액션도 request_pm_callback. create_lead 액션 X.
 `;
 
   // ─── 운영자 모드 안내 — 도구 카탈로그는 tools 필드로 별도 전달, 여기엔 짧은 사용 정책 + 선택 매핑 ───
