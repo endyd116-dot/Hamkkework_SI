@@ -1183,7 +1183,7 @@ async function send(question) {
   if (usedFallback) {
     const note = document.createElement('div');
     note.style.cssText = 'margin-top:6px;font-size:10px;color:var(--steel);font-style:italic';
-    note.textContent = '※ 오프라인 응답 (Gemini 미연결)';
+    note.textContent = '※ AI 응답이 잠시 지연됐어요. 1분 뒤 다시 질문해주시면 정확하게 안내드릴게요.';
     typingEl.appendChild(note);
   }
 
