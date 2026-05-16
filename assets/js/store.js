@@ -96,9 +96,29 @@ const KEYS = {
   adminCredentials: `${NS}.adminCredentials`, // 어드민 계정 (email, name, phone, role, passwordHash, salt)
   emailDrafts: `${NS}.emailDrafts`, // AI/PM이 작성한 이메일 (draft/sent/failed)
   calendarNotes: `${NS}.calendarNotes`, // 어드민 개인 메모 (date YYYY-MM-DD, text, color)
+  kbDocs: `${NS}.kbDocs`,       // PPT/PDF 업로드에서 추출한 텍스트 문서 (회사 브리프 자료)
+  qrBrief: `${NS}.qrBrief`,     // 회사 브리프 (kbDocs 압축본)
+  qrArchive: `${NS}.qrArchive`, // 답변 생성 자동 보관함
   auth: `${NS}.auth`,
   theme: `${NS}.theme`,
 };
+
+/* 🔄 레거시 키(`hamkkework.kbDocs.v1`) → 공식 KEYS로 일회성 마이그레이션.
+   admin-views가 1차 때 잠시 직접 localStorage `.v1` 접미사 키를 썼었음. */
+(function migrateLegacyV1Keys() {
+  try {
+    const migrate = (legacyKey, newKey) => {
+      const legacy = localStorage.getItem(legacyKey);
+      if (legacy != null && localStorage.getItem(newKey) == null) {
+        localStorage.setItem(newKey, legacy);
+        localStorage.removeItem(legacyKey);
+      }
+    };
+    migrate('hamkkework.kbDocs.v1',    KEYS.kbDocs);
+    migrate('hamkkework.qrBrief.v1',   KEYS.qrBrief);
+    migrate('hamkkework.qrArchive.v1', KEYS.qrArchive);
+  } catch {}
+})();
 
 /* ============================================================
    비밀번호 해싱 — SHA-256 + per-account salt (Web Crypto API)
@@ -474,13 +494,24 @@ export async function ensureSeed() {
 /* ============================================================
    Generic CRUD helpers
    ============================================================ */
+// 🛡 무한 누적 방지 — 큰 로그성 컬렉션은 add 시 자동 cull (LRU 식 끝부터 잘라냄)
+const COLLECTION_HARD_CAP = {
+  [KEYS.chatLogs]: 500,    // 세션 500개 보관 (브라우저 평균 5MB localStorage 한도 대응)
+  [KEYS.usageLog]: 2000,   // AI 호출 기록 2000건
+  [KEYS.scheduledTasks]: 500,
+  [KEYS.emailDrafts]: 500,
+};
+
 const collection = (key) => ({
   all: () => read(key, []),
   byId: (id) => read(key, []).find((x) => x.id === id),
   add: (item) => {
     const list = read(key, []);
     const next = { id: item.id || uid(), createdAt: nowIso(), ...item };
-    write(key, [next, ...list]);
+    let merged = [next, ...list];
+    const cap = COLLECTION_HARD_CAP[key];
+    if (cap && merged.length > cap) merged = merged.slice(0, cap);
+    write(key, merged);
     return next;
   },
   update: (id, patch) => {
@@ -517,6 +548,38 @@ export const store = {
   frozenResponses: collection(KEYS.frozenResponses),  // #4
   emailDrafts: collection(KEYS.emailDrafts),
   calendarNotes: collection(KEYS.calendarNotes),
+
+  // 📚 PPT/PDF 업로드 추출 텍스트 (회사 브리프 raw 자료) — list 형태
+  kbDocs: {
+    all: () => read(KEYS.kbDocs, []),
+    add(doc) {
+      const list = read(KEYS.kbDocs, []);
+      list.unshift(doc);
+      write(KEYS.kbDocs, list.slice(0, 10)); // 안전 cap
+      return doc;
+    },
+    remove(id) { write(KEYS.kbDocs, read(KEYS.kbDocs, []).filter((d) => d.id !== id)); },
+    setAll(v) { write(KEYS.kbDocs, Array.isArray(v) ? v : []); },
+  },
+  // 🪶 회사 브리프 — 단일 객체 (kbDocs 압축본 + 메타)
+  qrBrief: {
+    get: () => read(KEYS.qrBrief, null),
+    set: (v) => write(KEYS.qrBrief, v),
+    clear: () => localStorage.removeItem(KEYS.qrBrief),
+  },
+  // 🗂 답변 생성 자동 보관함
+  qrArchive: {
+    all: () => read(KEYS.qrArchive, []),
+    add(item) {
+      const list = read(KEYS.qrArchive, []);
+      list.unshift(item);
+      write(KEYS.qrArchive, list.slice(0, 100));
+      return item;
+    },
+    remove(id) { write(KEYS.qrArchive, read(KEYS.qrArchive, []).filter((x) => x.id !== id)); },
+    clear() { localStorage.removeItem(KEYS.qrArchive); },
+    setAll(v) { write(KEYS.qrArchive, Array.isArray(v) ? v : []); },
+  },
 
   pricing: {
     get: () => read(KEYS.pricing, {}),

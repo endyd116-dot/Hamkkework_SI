@@ -10,7 +10,7 @@
  * - toast notifications
  */
 
-import { store, utils, ensureSeed } from './store.js';
+import { store, utils, ensureSeed, fireAutomation } from './store.js';
 
 await ensureSeed();
 
@@ -284,6 +284,9 @@ leadForm?.addEventListener('submit', async (e) => {
     status: 'new',
     source: 'website',
   });
+
+  // 1-1. 🤖 자동화 — lead.new 룰 발화 → emailDrafts에 draft 생성
+  try { fireAutomation('lead.new', { name: lead.name, email: lead.email, phone: lead.phone, leadId: lead.id }); } catch {}
 
   // 2. Try Netlify Function (production), fallback to mailto in dev
   let serverOk = false;

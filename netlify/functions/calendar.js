@@ -133,7 +133,7 @@ export default async (req) => {
         events.push(event({
           uid: `proj-start-${p.id}`,
           dtstamp,
-          summary: `🚀 [시작] ${p.title || p.clientName || '프로젝트'}`,
+          summary: `🚀 [시작] ${p.name || p.title || p.clientName || '프로젝트'}`,
           description: `${p.clientName || ''}\n${p.summary || ''}`,
           dtstart: ymd,
           allDay: true,
@@ -147,7 +147,7 @@ export default async (req) => {
         events.push(event({
           uid: `proj-end-${p.id}`,
           dtstamp,
-          summary: `⏰ [마감] ${p.title || p.clientName || '프로젝트'}`,
+          summary: `⏰ [마감] ${p.name || p.title || p.clientName || '프로젝트'}`,
           description: `${p.clientName || ''}\n${p.summary || ''}`,
           dtstart: ymd,
           allDay: true,
@@ -184,9 +184,9 @@ export default async (req) => {
     }));
   }
 
-  // 인보이스 마감
+  // 인보이스 마감 — dueDate가 정식이지만 기존 dueAt 데이터도 폴백 인식
   for (const inv of invoices) {
-    const ymd = toIcsDate((inv.dueDate || '').slice(0, 10));
+    const ymd = toIcsDate(((inv.dueDate || inv.dueAt) || '').slice(0, 10));
     if (!ymd) continue;
     events.push(event({
       uid: `inv-${inv.id}`,

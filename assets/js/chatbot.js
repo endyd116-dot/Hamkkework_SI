@@ -11,7 +11,7 @@
  *  7. Logs conversation to store.chatLogs (admin can review)
  */
 
-import { store, utils } from './store.js';
+import { store, utils, fireAutomation } from './store.js';
 
 const fab = document.getElementById('chatbotFab');
 const panel = document.getElementById('chatbotPanel');
@@ -321,6 +321,9 @@ async function executeAction(action) {
 
       leadCreatedInSession = true;
       lastLeadAt = Date.now();
+
+      // 🤖 자동화 — lead.new 룰 발화 → emailDrafts에 draft 생성
+      try { fireAutomation('lead.new', { name: lead.name, email: lead.email, phone: lead.phone, leadId: lead.id }); } catch {}
 
       // Fire-and-forget server notify (email/Slack)
       try {
@@ -845,7 +848,7 @@ async function askGemini({ onToken, onToolCall, onToolResult } = {}) {
   //   매 호출 정적 영역(systemInstruction)에 들어가 Gemini Implicit Caching으로 -75% 입력 토큰.
   let companyBrief = '';
   try {
-    const _b = JSON.parse(localStorage.getItem('hamkkework.qrBrief.v1') || 'null');
+    const _b = store.qrBrief?.get?.() ?? null;
     if (_b && typeof _b.text === 'string' && _b.text.length > 100) companyBrief = _b.text;
   } catch {}
 
@@ -881,9 +884,18 @@ async function askGemini({ onToken, onToolCall, onToolResult } = {}) {
     }
   }
 
+  // 🔐 어드민이면 X-Admin-Token 헤더 첨부 — 서버가 토큰 검증해서 운영자 모드 허용
+  // 토큰 없으면 자동으로 고객 모드로 강등됨 (도구 미부착)
+  const _headers = { 'Content-Type': 'application/json', 'Accept': 'text/event-stream' };
+  if (isAdmin) {
+    try {
+      const _t = localStorage.getItem('hamkkework.syncToken') || '';
+      if (_t) _headers['X-Admin-Token'] = _t;
+    } catch {}
+  }
   const r = await fetch('/api/chat', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Accept': 'text/event-stream' },
+    headers: _headers,
     body: JSON.stringify({ messages, context, systemPromptExtra, sessionId, auth, variant }),
   });
   if (!r.ok || !r.body) {

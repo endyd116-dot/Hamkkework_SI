@@ -211,11 +211,11 @@ $('#exportBtn')?.addEventListener('click', () => {
     frozenResponses: store.frozenResponses.all(),
     emailDrafts: store.emailDrafts.all(),
     calendarNotes: store.calendarNotes?.all?.() ?? [],
-    kbDocs: (() => { try { return JSON.parse(localStorage.getItem('hamkkework.kbDocs.v1') || '[]'); } catch { return []; } })(),
-    qrBrief: (() => { try { return JSON.parse(localStorage.getItem('hamkkework.qrBrief.v1') || 'null'); } catch { return null; } })(),
-    qrArchive: (() => { try { return JSON.parse(localStorage.getItem('hamkkework.qrArchive.v1') || '[]'); } catch { return []; } })(),
+    kbDocs: store.kbDocs.all(),
+    qrBrief: store.qrBrief.get(),
+    qrArchive: store.qrArchive.all(),
     exportedAt: new Date().toISOString(),
-    schemaVersion: 2,
+    schemaVersion: 3,
   };
   const blob = new Blob([JSON.stringify(dump, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);

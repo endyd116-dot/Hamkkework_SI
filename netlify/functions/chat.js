@@ -148,7 +148,25 @@ export default async (req) => {
   catch { return json(400, { error: 'Invalid JSON' }); }
 
   const { messages = [], context = {}, systemPromptExtra = '', auth = null, variant = 'A', mode = '' } = payload;
-  const isAdmin = !!(auth && auth.email);
+
+  // 🔐 어드민 권한 검증 — auth 객체만 보고 isAdmin을 판단하면 클라이언트 위조 가능 (CVE급).
+  // /api/sync와 동일하게 X-Admin-Token 헤더가 ADMIN_API_TOKEN env와 일치할 때만 운영자 모드 허용.
+  // 토큰 없거나 불일치면 단순 고객 모드로 강등 — 도구·어드민 컨텍스트 모두 제거.
+  let isAdmin = false;
+  const claimedAdmin = !!(auth && auth.email);
+  if (claimedAdmin) {
+    const required = process.env.ADMIN_API_TOKEN;
+    const provided = req.headers.get('x-admin-token') || '';
+    if (required && provided && provided.length === required.length) {
+      let mismatch = 0;
+      for (let i = 0; i < required.length; i++) mismatch |= required.charCodeAt(i) ^ provided.charCodeAt(i);
+      if (mismatch === 0) isAdmin = true;
+    }
+    if (!isAdmin) {
+      console.warn('[chat] admin claim rejected — token missing or mismatch. Email:', auth.email);
+    }
+  }
+
   // 'compose' 모드 — 어드민 [고객요청 답변생성] 전용 경량 경로.
   // tools 미부착 + admin dynamic preamble 미주입 + 캐시 미사용 + systemPromptExtra만 시스템 지시로 사용.
   const composeMode = mode === 'compose';

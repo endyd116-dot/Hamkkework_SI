@@ -1144,8 +1144,8 @@ export function mountProjects() {
   $('#newProjectBtn')?.addEventListener('click', () => openProjectDrawer(null));
   $$('[data-action="open-project"]').forEach((el) => el.addEventListener('click', () => openProjectDrawer(el.dataset.id)));
 }
-/* ─── 🤖 won 전환 hook: 프로젝트·인보이스 30/40/30 자동 생성 (확인 후) ─── */
-function maybeAutoCreateProjectFromLead(lead) {
+/* ─── 🤖 won 전환 hook: 프로젝트·인보이스 30/40/30 자동 생성 + 포털용 client 연결 ─── */
+async function maybeAutoCreateProjectFromLead(lead) {
   if (!lead) return;
   // 이미 이 리드로 만들어진 프로젝트 있으면 skip
   const existing = store.projects.all().find((p) => p && p.leadId === lead.id);
@@ -1155,8 +1155,8 @@ function maybeAutoCreateProjectFromLead(lead) {
   }
   const yes = window.confirm(
     `리드 [${lead.name || ''}]을(를) 완료(won)로 옮겼습니다.\n\n` +
-    `해당 리드로 프로젝트 + 인보이스 30/40/30 3건을 자동 생성할까요?\n` +
-    `(생성 후 [프로젝트 진행]·[결제/인보이스] 메뉴에서 세부 편집 가능)`
+    `해당 리드로 프로젝트 + 인보이스 30/40/30 3건 + 포털용 client 계정까지 자동 생성할까요?\n` +
+    `(생성 후 [프로젝트 진행]·[결제/인보이스]·[클라이언트 포털] 메뉴에서 세부 편집 가능)`
   );
   if (!yes) return;
 
@@ -1167,6 +1167,8 @@ function maybeAutoCreateProjectFromLead(lead) {
     summary: lead.message || '',
     status: 'kickoff',
     leadId: lead.id,
+    startDate: new Date().toISOString().slice(0, 10),
+    deadline: '',
     milestones: [
       { label: '기획 · 계약', done: false },
       { label: '디자인 · IA', done: false },
@@ -1175,6 +1177,31 @@ function maybeAutoCreateProjectFromLead(lead) {
     ],
     reports: [],
   });
+
+  // 🆔 포털용 client 계정 — 이메일로 매칭, 없으면 생성 (임시 비밀번호 발급)
+  let clientNote = '';
+  if (lead.email) {
+    const emailLc = lead.email.trim().toLowerCase();
+    let client = store.clients.all().find((c) => (c.email || '').trim().toLowerCase() === emailLc);
+    if (!client) {
+      const tempPwd = _genTempPwd();
+      const { hash, salt } = await hashPassword(tempPwd);
+      client = store.clients.add({
+        name: lead.name || '',
+        email: lead.email,
+        company: lead.company || '',
+        projects: [proj.id],
+        passwordHash: hash,
+        salt,
+        tempPwdHint: `임시 비밀번호: ${tempPwd}`, // 발급 직후 확인용 — 첫 접속 후 변경 안내
+      });
+      clientNote = ` · client 신규 발급 (임시 비밀번호: ${tempPwd})`;
+    } else {
+      const projects = Array.from(new Set([...(client.projects || []), proj.id]));
+      store.clients.update(client.id, { projects });
+      clientNote = ` · 기존 client에 프로젝트 연결`;
+    }
+  }
 
   // 인보이스 30/40/30 — 금액은 lead.budget 파싱 시도, 실패 시 0
   const budgetRaw = String(lead.budget || '').replace(/[^\d]/g, '');
@@ -1191,11 +1218,19 @@ function maybeAutoCreateProjectFromLead(lead) {
       phase: ph.phase,
       amount: budgetTotal ? Math.round(budgetTotal * ph.ratio) : 0,
       status: 'unpaid',
-      dueAt: '',
+      dueDate: '',
     });
   });
 
-  toast(`프로젝트 [${projectName}] + 인보이스 3건 자동 생성 완료`, 'success');
+  toast(`프로젝트 [${projectName}] + 인보이스 3건 자동 생성${clientNote}`, 'success');
+}
+
+function _genTempPwd() {
+  // 어드민이 PM에게 한 번 알려주기 좋은 8자 영문+숫자
+  const A = 'abcdefghjkmnpqrstuvwxyz23456789';
+  const buf = new Uint8Array(8);
+  if (typeof crypto !== 'undefined' && crypto.getRandomValues) crypto.getRandomValues(buf);
+  return Array.from(buf).map((b) => A[b % A.length]).join('');
 }
 
 function openProjectDrawer(id) {
@@ -1228,6 +1263,10 @@ function openProjectDrawer(id) {
             <option value="done" ${p.status==='done'?'selected':''}>완료</option>
           </select>
         </div>
+      </div>
+      <div class="adm-row">
+        <div class="adm-field"><label>시작일</label><input id="pj_start" type="date" value="${p.startDate||''}"></div>
+        <div class="adm-field"><label>마감일 (인도)</label><input id="pj_deadline" type="date" value="${p.deadline||''}"></div>
       </div>
       <div class="adm-field"><label>요약</label><textarea id="pj_summary">${escapeHtml(p.summary||'')}</textarea></div>
 
@@ -1294,6 +1333,8 @@ function openProjectDrawer(id) {
       clientName: $('#pj_client').value.trim(),
       summary: $('#pj_summary').value.trim(),
       status: $('#pj_status').value,
+      startDate: $('#pj_start')?.value || '',
+      deadline: $('#pj_deadline')?.value || '',
       milestones,
       reports,
     };
@@ -1357,7 +1398,9 @@ export function mountInvoices() {
 }
 function openInvoiceDrawer(id) {
   const isEdit = !!id;
-  const inv = id ? store.invoices.byId(id) : { clientName: '', phase: '선금 30%', amount: 0, status: 'unpaid', dueAt: '' };
+  const inv = id ? store.invoices.byId(id) : { clientName: '', phase: '선금 30%', amount: 0, status: 'unpaid', dueDate: '' };
+  // 🔄 backward-compat — 기존 dueAt 필드를 dueDate로 표시
+  if (inv && !inv.dueDate && inv.dueAt) inv.dueDate = inv.dueAt;
   openDrawer({
     title: isEdit ? '인보이스 편집' : '+ 새 인보이스',
     body: `
@@ -1374,7 +1417,7 @@ function openInvoiceDrawer(id) {
         <div class="adm-field"><label>금액 (만원)</label><input id="iv_amount" type="number" value="${inv.amount||0}"></div>
       </div>
       <div class="adm-row">
-        <div class="adm-field"><label>마감일</label><input id="iv_due" type="date" value="${inv.dueAt||''}"></div>
+        <div class="adm-field"><label>마감일</label><input id="iv_due" type="date" value="${inv.dueDate||''}"></div>
         <div class="adm-field"><label>상태</label>
           <select id="iv_status">
             <option value="unpaid" ${inv.status==='unpaid'?'selected':''}>미입금</option>
@@ -1396,7 +1439,8 @@ function openInvoiceDrawer(id) {
       clientName: $('#iv_client').value.trim(),
       phase: $('#iv_phase').value,
       amount: Number($('#iv_amount').value) || 0,
-      dueAt: $('#iv_due').value,
+      dueDate: $('#iv_due').value,
+      dueAt: $('#iv_due').value, // backward-compat — 기존 dueAt 참조 코드 보호
       status: $('#iv_status').value,
       memo: $('#iv_memo').value.trim(),
     };
@@ -2820,11 +2864,12 @@ function _collectEvents(dateKey) {
   }
   // 프로젝트 시작
   for (const p of store.projects.all()) {
+    const pname = p.name || p.title || p.clientName || '프로젝트';
     if (sameDay(p.startDate)) {
-      events.push({ type: 'project_start', icon: '🚀', color: '#7c3aed', title: `${p.title || p.clientName} 시작`, id: p.id });
+      events.push({ type: 'project_start', icon: '🚀', color: '#7c3aed', title: `${pname} 시작`, id: p.id });
     }
     if (sameDay(p.deadline || p.endDate)) {
-      events.push({ type: 'project_due', icon: '⏰', color: '#f59e0b', title: `${p.title || p.clientName} 마감`, id: p.id });
+      events.push({ type: 'project_due', icon: '⏰', color: '#f59e0b', title: `${pname} 마감`, id: p.id });
     }
   }
   // 견적서 생성
@@ -2839,9 +2884,10 @@ function _collectEvents(dateKey) {
       events.push({ type: 'lead', icon: '✨', color: '#64748b', title: `${l.name} ${l.company ? '('+l.company+')' : ''}`, id: l.id });
     }
   }
-  // 인보이스 마감
+  // 인보이스 마감 — dueDate가 정식이지만 기존 dueAt 데이터도 폴백 인식
   for (const inv of store.invoices.all()) {
-    if (sameDay(inv.dueDate)) {
+    const due = inv.dueDate || inv.dueAt;
+    if (sameDay(due)) {
       events.push({ type: 'invoice_due', icon: '💰', color: '#ef4444', title: `${inv.clientName||'인보이스'} ${inv.amount?'('+inv.amount+'만원)':''} 마감`, id: inv.id });
     }
   }
@@ -3712,7 +3758,6 @@ export function mountSettings() {
     window.rerenderView?.();
   });
   $('#bkBtn')?.addEventListener('click', () => {
-    const lsGet = (k, def) => { try { return JSON.parse(localStorage.getItem(k) || JSON.stringify(def)); } catch { return def; } };
     const dump = {
       cases: store.cases.all(),
       faqs: store.faqs.all(),
@@ -3732,11 +3777,11 @@ export function mountSettings() {
       frozenResponses: store.frozenResponses.all(),
       emailDrafts: store.emailDrafts.all(),
       calendarNotes: store.calendarNotes?.all?.() ?? [],
-      kbDocs:    lsGet('hamkkework.kbDocs.v1', []),
-      qrBrief:   lsGet('hamkkework.qrBrief.v1', null),
-      qrArchive: lsGet('hamkkework.qrArchive.v1', []),
+      kbDocs: store.kbDocs.all(),
+      qrBrief: store.qrBrief.get(),
+      qrArchive: store.qrArchive.all(),
       exportedAt: utils.nowIso(),
-      schemaVersion: 2,
+      schemaVersion: 3,
     };
     downloadJson(dump, `hamkkework-${new Date().toISOString().slice(0,10)}.json`);
   });
@@ -3764,12 +3809,12 @@ export function mountSettings() {
       if (Array.isArray(data.frozenResponses)) store.frozenResponses.setAll(data.frozenResponses);
       if (Array.isArray(data.emailDrafts)) store.emailDrafts.setAll(data.emailDrafts);
       if (Array.isArray(data.calendarNotes) && store.calendarNotes?.setAll) store.calendarNotes.setAll(data.calendarNotes);
-      if (Array.isArray(data.kbDocs)) localStorage.setItem('hamkkework.kbDocs.v1', JSON.stringify(data.kbDocs));
+      if (Array.isArray(data.kbDocs)) store.kbDocs.setAll(data.kbDocs);
       if (data.qrBrief !== undefined) {
-        if (data.qrBrief === null) localStorage.removeItem('hamkkework.qrBrief.v1');
-        else localStorage.setItem('hamkkework.qrBrief.v1', JSON.stringify(data.qrBrief));
+        if (data.qrBrief === null) store.qrBrief.clear();
+        else store.qrBrief.set(data.qrBrief);
       }
-      if (Array.isArray(data.qrArchive)) localStorage.setItem('hamkkework.qrArchive.v1', JSON.stringify(data.qrArchive));
+      if (Array.isArray(data.qrArchive)) store.qrArchive.setAll(data.qrArchive);
       toast('복원 완료', 'success');
       setTimeout(() => location.reload(), 800);
     } catch (err) {
@@ -3862,26 +3907,19 @@ function _qrPickCases(requestText, limit = 3) {
   return [...all].sort((a, b) => (b.year || 0) - (a.year || 0)).slice(0, limit);
 }
 
-/* ─── 지식 문서 (PPT/PDF 업로드) — localStorage ─── */
-const KB_DOCS_KEY = 'hamkkework.kbDocs.v1';
+/* ─── 지식 문서 (PPT/PDF 업로드) — 공식 store.kbDocs 컬렉션 사용 ─── */
 const KB_MAX_DOCS = 5;
 const KB_MAX_TEXT_CHARS = 60000;
 
 const _kbDocs = {
-  all() {
-    try { return JSON.parse(localStorage.getItem(KB_DOCS_KEY) || '[]'); }
-    catch { return []; }
-  },
+  all() { return store.kbDocs.all(); },
   add(doc) {
-    const list = _kbDocs.all();
+    const list = store.kbDocs.all();
     list.unshift(doc);
-    while (list.length > KB_MAX_DOCS) list.pop();
-    localStorage.setItem(KB_DOCS_KEY, JSON.stringify(list));
+    const trimmed = list.slice(0, KB_MAX_DOCS);
+    store.kbDocs.setAll(trimmed);
   },
-  remove(id) {
-    const list = _kbDocs.all().filter((d) => d.id !== id);
-    localStorage.setItem(KB_DOCS_KEY, JSON.stringify(list));
-  },
+  remove(id) { store.kbDocs.remove(id); },
 };
 
 function _kbFmtSize(b) {
@@ -4028,26 +4066,13 @@ function _kbBindListHandlers(onChange) {
   });
 }
 
-/* ─── 답변 생성 보관함 — localStorage ─── */
-const QR_ARCHIVE_KEY = 'hamkkework.qrArchive.v1';
+/* ─── 답변 생성 보관함 — 공식 store.qrArchive 사용 ─── */
 const QR_ARCHIVE_MAX = 100;
-
 const _qrArchive = {
-  all() {
-    try { return JSON.parse(localStorage.getItem(QR_ARCHIVE_KEY) || '[]'); }
-    catch { return []; }
-  },
-  add(item) {
-    const list = _qrArchive.all();
-    list.unshift(item);
-    while (list.length > QR_ARCHIVE_MAX) list.pop();
-    localStorage.setItem(QR_ARCHIVE_KEY, JSON.stringify(list));
-  },
-  remove(id) {
-    const list = _qrArchive.all().filter((x) => x.id !== id);
-    localStorage.setItem(QR_ARCHIVE_KEY, JSON.stringify(list));
-  },
-  clear() { localStorage.removeItem(QR_ARCHIVE_KEY); },
+  all() { return store.qrArchive.all(); },
+  add(item) { store.qrArchive.add(item); },
+  remove(id) { store.qrArchive.remove(id); },
+  clear() { store.qrArchive.clear(); },
 };
 
 function _qrFmtWhen(iso) {
@@ -4136,15 +4161,11 @@ function _qrRenderArchiveList() {
   `;
 }
 
-/* ─── 회사 브리프 — localStorage 캐시 ─── */
-const QR_BRIEF_KEY = 'hamkkework.qrBrief.v1';
+/* ─── 회사 브리프 — 공식 store.qrBrief 사용 ─── */
 const _qrBrief = {
-  get() {
-    try { return JSON.parse(localStorage.getItem(QR_BRIEF_KEY) || 'null'); }
-    catch { return null; }
-  },
-  set(v) { localStorage.setItem(QR_BRIEF_KEY, JSON.stringify(v)); },
-  clear() { localStorage.removeItem(QR_BRIEF_KEY); },
+  get() { return store.qrBrief.get(); },
+  set(v) { store.qrBrief.set(v); },
+  clear() { store.qrBrief.clear(); },
 };
 
 function _qrTimeAgo(iso) {
@@ -4807,7 +4828,7 @@ export function mountQuoteResponder() {
       });
       lastResultText = _qrHumanize(raw);
       renderResult();
-      // 🗂 자동 보관
+      // 🗂 자동 보관 — 같은 입력으로 5분 내 재생성 시엔 최신본으로 교체 (중복 보관 방지)
       if (lastResultText && lastResultText.length >= 50) {
         const archived = {
           id: 'qr_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
@@ -4823,6 +4844,12 @@ export function mountQuoteResponder() {
           title: _qrDeriveTitle(requestText),
           tags: _qrDeriveTags(requestText + ' ' + lastResultText),
         };
+        const list = _qrArchive.all();
+        const fiveMin = 5 * 60 * 1000;
+        const dupIdx = list.findIndex((x) => x.requestText === requestText && x.platform === selectedPlatform && (Date.now() - new Date(x.savedAt).getTime()) < fiveMin);
+        if (dupIdx >= 0) {
+          _qrArchive.remove(list[dupIdx].id);
+        }
         _qrArchive.add(archived);
         refreshArchive();
       }
