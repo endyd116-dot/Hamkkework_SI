@@ -3585,10 +3585,10 @@ function _qrPickCases(requestText, limit = 3) {
 
 function _qrBuildSystemExtra({ tone, length, settings, cases }) {
   const lengthHint = length === 'short'
-    ? '본문 분량은 350~450자 정도로 간결하게. 끝맺음을 반드시 완결할 것.'
+    ? '본문 분량은 400~500자 정도로 간결하게. 끝맺음을 반드시 완결할 것.'
     : length === 'long'
-      ? '본문 분량은 700~850자 정도. 끝맺음을 반드시 완결할 것 (잘려서는 안 됨).'
-      : '본문 분량은 500~650자 정도가 적당. 끝맺음을 반드시 완결할 것.';
+      ? '본문 분량은 900~1200자 정도. 끝맺음을 반드시 완결할 것 (잘려서는 안 됨).'
+      : '본문 분량은 650~800자 정도가 적당. 끝맺음을 반드시 완결할 것.';
   const toneHint = tone === 'formal'
     ? '톤은 정중한 비즈니스 존댓말. 격식 있되 딱딱하지 않게.'
     : '톤은 따뜻한 존댓말. 사람이 직접 쓴 듯 자연스럽고 친근하지만, 가벼운 표현은 자제.';
@@ -3800,7 +3800,6 @@ export function mountQuoteResponder() {
     const tone = $('#qr_tone').value;
     const length = $('#qr_length').value;
     const settings = store.settings.get() || {};
-    const auth = store.auth.get() || null;
 
     if (currentRunAbort) { try { currentRunAbort.abort(); } catch {} }
     const abort = new AbortController();
@@ -3828,10 +3827,9 @@ export function mountQuoteResponder() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          mode: 'compose', // 서버: tools 미부착 + admin preamble 우회 + 캐시 미사용 (타임아웃 방지)
           messages: [{ role: 'user', text: userMsg }],
-          context: { mode: 'quote_responder' },
           systemPromptExtra,
-          auth,
           variant: 'A',
         }),
         signal: abort.signal,

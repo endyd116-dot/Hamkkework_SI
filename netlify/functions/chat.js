@@ -147,8 +147,11 @@ export default async (req) => {
   try { payload = await req.json(); }
   catch { return json(400, { error: 'Invalid JSON' }); }
 
-  const { messages = [], context = {}, systemPromptExtra = '', auth = null, variant = 'A' } = payload;
+  const { messages = [], context = {}, systemPromptExtra = '', auth = null, variant = 'A', mode = '' } = payload;
   const isAdmin = !!(auth && auth.email);
+  // 'compose' 모드 — 어드민 [고객요청 답변생성] 전용 경량 경로.
+  // tools 미부착 + admin dynamic preamble 미주입 + 캐시 미사용 + systemPromptExtra만 시스템 지시로 사용.
+  const composeMode = mode === 'compose';
 
   if (!Array.isArray(messages) || messages.length === 0) {
     return json(400, { error: 'messages array required' });
@@ -158,8 +161,8 @@ export default async (req) => {
     return json(400, { error: 'Last message must be a non-empty user message' });
   }
 
-  // 💰 캐시 조회 (운영자 모드 / 멀티 턴은 캐시 안 함)
-  const cacheable = !isAdmin && messages.length === 1;
+  // 💰 캐시 조회 (운영자 모드 / 멀티 턴 / compose 모드는 캐시 안 함)
+  const cacheable = !isAdmin && !composeMode && messages.length === 1;
   const cacheKey = cacheable ? makeCacheKey(last.text, isAdmin, variant) : null;
   if (cacheKey) {
     const cached = cacheGet(cacheKey);
@@ -186,7 +189,10 @@ export default async (req) => {
   // 🧊 #1 IMPLICIT CACHING — system prompt를 정적/동적으로 분리
   // 정적 부분 (회사·가격·케이스·FAQ·도구·가이드)은 systemInstruction에 → Gemini 자동 캐시 (-75%)
   // 동적 부분 (운영자 데이터·variant 톤·extra)은 contents 첫 user 메시지로 주입
-  const { staticPrompt, dynamicPreamble } = buildSystemPrompt(context, effectiveExtra, { isAdmin, auth, variant });
+  // ✂ compose 모드: 회사 가이드·도구·운영자 컨텍스트 모두 건너뛰고, 클라이언트 systemPromptExtra만 시스템 지시로 사용
+  const { staticPrompt, dynamicPreamble } = composeMode
+    ? { staticPrompt: effectiveExtra || 'You are a helpful Korean writing assistant.', dynamicPreamble: '' }
+    : buildSystemPrompt(context, effectiveExtra, { isAdmin, auth, variant });
 
   // Convert internal {role, text} → Gemini {role, parts}
   let contents = messages
@@ -206,13 +212,16 @@ export default async (req) => {
   }
   const collapsed = collapseTurns(contents);
 
-  const { chain, level, reason } = selectChain({
-    isAdmin,
-    lastText: last.text,
-    conversationLength: messages.length,
-  });
+  const { chain, level, reason } = composeMode
+    ? { chain: MODEL_CHAIN_HIGH, level: 'high', reason: 'compose' }
+    : selectChain({
+        isAdmin,
+        lastText: last.text,
+        conversationLength: messages.length,
+      });
   const model = chain[0]; // 체인의 1차 모델 — 실패 시 callGeminiWithChain이 다음으로 폴백
-  const maxOutputTokens = maxTokensFor({ isAdmin, level, lastText: last.text });
+  // compose 모드는 본문 분량 확보를 위해 토큰 상향 (1500). 일반은 기존 로직.
+  const maxOutputTokens = composeMode ? 1500 : maxTokensFor({ isAdmin, level, lastText: last.text });
   const routing = {
     tier: level,
     chain,
@@ -221,7 +230,8 @@ export default async (req) => {
   };
 
   // 🛠 Function Calling — HIGH 체인(어려운 질문)에만 도구 첨부 (LOW는 단순 안내라 도구 불필요)
-  const tools = (level === 'high')
+  // ✂ compose 모드는 도구 미부착 (agent loop 우회 — 타임아웃 방지)
+  const tools = (!composeMode && level === 'high')
     ? [{ functionDeclarations: getToolDeclarations({ isAdmin }) }]
     : undefined;
 
