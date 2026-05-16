@@ -51,42 +51,72 @@ export const handler = async (event) => {
     `— 메인페이지 자동 발송 (${new Date().toISOString()})`,
   ].join('\n');
 
-  // === Provider integration (uncomment when ready) ===
+  const channels = { resend: 'skipped', slack: 'skipped' };
+  const errors = [];
+
   // Option A: Resend
-  // if (process.env.RESEND_API_KEY) {
-  //   await fetch('https://api.resend.com/emails', {
-  //     method: 'POST',
-  //     headers: {
-  //       Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
-  //       'Content-Type': 'application/json',
-  //     },
-  //     body: JSON.stringify({
-  //       from: 'noreply@hamkkework.com',
-  //       to: process.env.EMAIL_TO || 'endyd116@gmail.com',
-  //       subject: `[함께워크_SI] 신규 상담 - ${name} / ${type}`,
-  //       text: lines,
-  //     }),
-  //   });
-  // }
+  if (process.env.RESEND_API_KEY) {
+    try {
+      const r = await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          from: process.env.RESEND_FROM || 'onboarding@resend.dev',
+          to: process.env.EMAIL_TO || 'endyd116@gmail.com',
+          reply_to: email,
+          subject: `[함께워크_SI] 신규 상담 - ${name}${type ? ' / ' + type : ''}`,
+          text: lines,
+        }),
+      });
+      if (r.ok) channels.resend = 'sent';
+      else {
+        channels.resend = `error_${r.status}`;
+        errors.push(`resend ${r.status}: ${(await r.text().catch(() => '')).slice(0, 200)}`);
+      }
+    } catch (e) {
+      channels.resend = 'exception';
+      errors.push('resend exception: ' + String(e?.message || e));
+    }
+  }
 
   // Option B: Slack webhook
-  // if (process.env.SLACK_WEBHOOK_URL) {
-  //   await fetch(process.env.SLACK_WEBHOOK_URL, {
-  //     method: 'POST',
-  //     headers: { 'Content-Type': 'application/json' },
-  //     body: JSON.stringify({ text: lines }),
-  //   });
-  // }
+  if (process.env.SLACK_WEBHOOK_URL) {
+    try {
+      const r = await fetch(process.env.SLACK_WEBHOOK_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: lines }),
+      });
+      channels.slack = r.ok ? 'sent' : `error_${r.status}`;
+      if (!r.ok) errors.push(`slack ${r.status}`);
+    } catch (e) {
+      channels.slack = 'exception';
+      errors.push('slack exception: ' + String(e?.message || e));
+    }
+  }
 
-  // For now: log to function output (visible in Netlify dashboard)
-  console.log('[send-lead]', lines);
+  // 항상 로그 출력 (Netlify 대시보드에서 추적용)
+  console.log('[send-lead]', JSON.stringify({ name, email, type, channels, errors }));
+
+  // 메시지를 채널 상태에 따라 정확하게
+  const anySent = channels.resend === 'sent' || channels.slack === 'sent';
+  const anyConfigured = !!(process.env.RESEND_API_KEY || process.env.SLACK_WEBHOOK_URL);
+  const message = anySent
+    ? '상담 요청이 접수되었습니다. 24시간 이내 회신드릴게요.'
+    : anyConfigured
+      ? '상담 요청이 접수되었습니다 (알림 채널 일부 실패 — 서버 로그 확인 필요). 24시간 이내 회신드릴게요.'
+      : '상담 요청이 접수되었습니다 (알림 채널 미설정 — 어드민 [리드 관리]에서 확인). 24시간 이내 회신드릴게요.';
 
   return {
     statusCode: 200,
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       ok: true,
-      message: '리드가 접수되었습니다. 24시간 이내 회신드릴게요.',
+      message,
+      channels,
       received: { name, email, type },
     }),
   };

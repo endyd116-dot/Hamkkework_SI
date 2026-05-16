@@ -131,7 +131,7 @@
 <div class="toast-container" id="toastContainer"></div>
 
 <script type="module">
-import { store, ensureSeed } from './assets/js/store.js';
+import { store, ensureSeed, hashPassword, verifyPassword } from './assets/js/store.js';
 import { $, $$, escapeHtml, fmt, toast } from './assets/js/admin-ui.js';
 
 await ensureSeed();
@@ -147,17 +147,33 @@ function clearSession() { localStorage.removeItem(SESSION_KEY); }
 function showLogin() { $('#loginShell').style.display = 'grid'; $('#portalShell').style.display = 'none'; }
 function showPortal() { $('#loginShell').style.display = 'none'; $('#portalShell').style.display = 'block'; render(); }
 
-$('#loginForm').addEventListener('submit', (e) => {
+$('#loginForm').addEventListener('submit', async (e) => {
   e.preventDefault();
-  const email = $('#loginEmail').value.trim();
+  const email = $('#loginEmail').value.trim().toLowerCase();
   const pwd = $('#loginPwd').value;
   const clients = store.clients.all();
-  const match = clients.find(c => c.email === email && c.password === pwd);
-  if (!match) {
+  const candidate = clients.find((c) => (c.email || '').trim().toLowerCase() === email);
+  if (!candidate) {
     toast('계정 정보가 일치하지 않습니다', 'error');
     return;
   }
-  setSession({ id: match.id, name: match.name, email: match.email, at: new Date().toISOString() });
+  let ok = false;
+  if (candidate.passwordHash && candidate.salt) {
+    // 정상 흐름 — 해시 검증
+    ok = await verifyPassword(pwd, candidate.passwordHash, candidate.salt);
+  } else if (candidate.password) {
+    // 🔄 마이그레이션 — 기존 평문 비밀번호와 일치하면 해시로 즉시 업그레이드 후 평문 제거
+    if (candidate.password === pwd) {
+      const { hash, salt } = await hashPassword(pwd);
+      store.clients.update(candidate.id, { passwordHash: hash, salt, password: undefined });
+      ok = true;
+    }
+  }
+  if (!ok) {
+    toast('계정 정보가 일치하지 않습니다', 'error');
+    return;
+  }
+  setSession({ id: candidate.id, name: candidate.name, email: candidate.email, at: new Date().toISOString() });
   showPortal();
 });
 

@@ -692,96 +692,11 @@ async function executeAction(action) {
     }
 
     // ====================================================
-    // 운영자 전용 도구 (어드민 모드에서만 의미 있음)
+    // 운영자 전용 도구 — 모두 서버 Function Calling으로 이관됨.
+    // (tasks_list / tasks_update / chatlogs_get / leads_update 사용)
+    // 따라서 list_callback_requests, mark_task_done, summarize_chat,
+    // update_lead_stage 클라이언트 액션은 더 이상 호출되지 않음.
     // ====================================================
-
-    case 'list_callback_requests': {
-      const status = data.status || 'pending';
-      const tasks = store.scheduledTasks.all()
-        .filter((t) => t.type === 'callback_request' && t.status === status);
-      return {
-        ok: true,
-        message: `${tasks.length}건의 ${status === 'pending' ? '처리 대기' : '완료된'} 연락 요청`,
-        card: {
-          icon: '📋',
-          title: `${status === 'pending' ? '처리 대기' : '완료'} 연락 요청 (${tasks.length}건)`,
-          rows: tasks.length === 0
-            ? [['상태', '없음']]
-            : tasks.slice(0, 10).map((t) => [
-                `${t.leadName} (${t.urgency === 'urgent' ? '🚨' : '·'})`,
-                `${t.method === 'phone' ? '📞' : t.method === 'email' ? '📨' : '💬'} ${t.contact} · ${t.topic || '주제 없음'}`,
-              ]),
-          footer: '어드민 대시보드에서 [지금 발송] 또는 [취소] 클릭 가능',
-          tone: 'info',
-        },
-      };
-    }
-
-    case 'mark_task_done': {
-      const t = store.scheduledTasks.byId(data.taskId);
-      if (!t) return { ok: false, message: '해당 작업을 찾을 수 없습니다' };
-      store.scheduledTasks.update(data.taskId, {
-        status: 'done',
-        resolvedAt: utils.nowIso(),
-        resolveNote: data.note || '',
-      });
-      return {
-        ok: true,
-        message: `작업 처리 완료 (${t.leadName || t.subject || data.taskId})`,
-        card: {
-          icon: '✅',
-          title: '처리 완료',
-          rows: [
-            ['작업', t.type],
-            ['대상', t.leadName || t.leadEmail || '-'],
-            data.note && ['메모', data.note],
-          ].filter(Boolean),
-          tone: 'success',
-        },
-      };
-    }
-
-    case 'summarize_chat': {
-      const log = store.chatLogs.all().find((l) => l.sessionId === data.sessionId);
-      if (!log) return { ok: false, message: `세션 ${data.sessionId}를 찾을 수 없습니다` };
-      return {
-        ok: true,
-        message: `세션 ${data.sessionId} 요약`,
-        card: {
-          icon: '💬',
-          title: `대화 요약: ${data.sessionId}`,
-          rows: [
-            ['시작', fmtDate(log.messages?.[0]?.at)],
-            ['메시지 수', `${log.messages?.length || 0}건`],
-            ['최근 사용자 메시지', (log.messages || []).filter((m) => m.role === 'user').slice(-1)[0]?.text?.slice(0, 120) || '-'],
-          ],
-          footer: '※ AI가 위 데이터를 기반으로 요약을 답변 본문에 작성합니다.',
-          tone: 'info',
-        },
-      };
-    }
-
-    case 'update_lead_stage': {
-      const lead = store.leads.byId(data.leadId);
-      if (!lead) return { ok: false, message: '리드를 찾을 수 없습니다' };
-      const valid = ['new', 'consult', 'quote', 'contract', 'won', 'lost'];
-      if (!valid.includes(data.stage)) return { ok: false, message: '잘못된 단계 값' };
-      store.leads.update(data.leadId, { status: data.stage });
-      return {
-        ok: true,
-        message: `${lead.name} → ${data.stage}로 이동`,
-        card: {
-          icon: '🔀',
-          title: '리드 단계 변경',
-          rows: [
-            ['리드', lead.name],
-            ['이전', lead.status],
-            ['변경', data.stage],
-          ],
-          tone: 'success',
-        },
-      };
-    }
 
     default:
       return { ok: false, message: `알 수 없는 도구: ${tool}` };

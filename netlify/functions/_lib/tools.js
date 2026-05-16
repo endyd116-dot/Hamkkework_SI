@@ -74,6 +74,28 @@ function toolCacheSet(key, data) {
   toolCache.set(key, { at: Date.now(), data });
 }
 
+// 🔄 mutation 도구 → 관련 read-only 도구 캐시 prefix 무효화
+function toolCacheInvalidate(prefixes) {
+  if (!Array.isArray(prefixes) || !prefixes.length) return;
+  for (const k of [...toolCache.keys()]) {
+    for (const p of prefixes) {
+      if (k.startsWith(p + '::')) { toolCache.delete(k); break; }
+    }
+  }
+}
+
+const TOOL_INVALIDATES = {
+  leads_update:           ['leads_find', 'leads_list', 'leads_stats'],
+  tasks_update:           ['tasks_list', 'daily_briefing'],
+  tasks_delete:           ['tasks_list', 'daily_briefing'],
+  create_quote:           ['quotes_list', 'revenue_forecast'],
+  add_calendar_note:      ['calendar_events_list'],
+  mark_email_sent:        [],
+  send_email:             [],
+  frozen_response_create: ['frozen_response_suggest'],
+  update_bot_instruction: ['get_bot_instruction'],
+};
+
 function getBlobsStore() {
   return getStore({ name: STORE_NAME, consistency: 'strong' });
 }
@@ -1519,6 +1541,11 @@ export async function executeServerTool(name, args, { isAdmin }) {
     const result = await tool.handler(args || {});
     if (cacheKey && !result?.error) {
       toolCacheSet(cacheKey, result);
+    }
+    // 🔄 mutation 후 관련 read 도구 캐시 무효화 (다음 list/find가 stale 안 받게)
+    const invalidatePrefixes = TOOL_INVALIDATES[name];
+    if (invalidatePrefixes && !result?.error) {
+      toolCacheInvalidate(invalidatePrefixes);
     }
     return result;
   } catch (e) {

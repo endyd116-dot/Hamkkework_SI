@@ -17,14 +17,44 @@ const ALLOWED_KEYS = new Set([
   'adminCredentials', // 어드민 계정 (이메일, 이름, 휴대폰, role, passwordHash, salt)
   'emailDrafts',      // AI/PM 작성 이메일 (draft/sent/failed)
   'calendarNotes',    // 어드민 개인 메모 ({id, date, text, color})
+  'kbDocs',           // PPT/PDF 업로드에서 추출한 텍스트 문서
+  'qrBrief',          // 회사 브리프 (압축본, kbDocs 포함)
+  'qrArchive',        // 고객요청 답변생성 자동 보관함
 ]);
 
 const STORE_NAME = 'hamkkework';
+
+// 🔐 인증 — ADMIN_API_TOKEN env가 설정된 경우에만 헤더 검증.
+// 토큰 미설정 시(=레거시·로컬 개발) 거부 — 운영 배포에는 반드시 설정.
+function authOk(req) {
+  const required = process.env.ADMIN_API_TOKEN;
+  if (!required) return false; // 토큰 미설정이면 무조건 차단 (보안 fail-closed)
+  // 우선 헤더, 없으면 쿼리스트링 (sendBeacon은 헤더 첨부 불가하므로 token= 쿼리 허용)
+  let provided = req.headers.get('x-admin-token') || '';
+  if (!provided) {
+    try {
+      const url = new URL(req.url);
+      provided = url.searchParams.get('token') || '';
+    } catch {}
+  }
+  if (!provided) return false;
+  if (provided.length !== required.length) return false;
+  let mismatch = 0;
+  for (let i = 0; i < required.length; i++) mismatch |= required.charCodeAt(i) ^ provided.charCodeAt(i);
+  return mismatch === 0;
+}
 
 export default async (req) => {
   const method = req.method;
   if (method !== 'GET' && method !== 'POST') {
     return json(405, { error: 'method not allowed' });
+  }
+
+  if (!authOk(req)) {
+    return json(401, {
+      error: 'unauthorized',
+      hint: 'X-Admin-Token 헤더를 ADMIN_API_TOKEN env 값과 동일하게 보내야 합니다. Netlify Site settings → Environment variables 에서 ADMIN_API_TOKEN 설정 필요.',
+    });
   }
 
   const url = new URL(req.url);

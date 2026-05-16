@@ -3,7 +3,9 @@
  * Each view exports a render function that returns the HTML and an optional `mount` hook.
  */
 
-import { store, utils, ensureSeed, DEFAULT_QUALITY_TIERS, hashPassword, verifyPassword } from './store.js';
+import { store, utils, ensureSeed, DEFAULT_QUALITY_TIERS, hashPassword, verifyPassword, syncAuth, syncNow, fireAutomation } from './store.js';
+
+function _getSyncTokenSafe() { try { return syncAuth.get(); } catch { return ''; } }
 import { $, $$, escapeHtml, fmt, toast, openDrawer, closeDrawer, downloadJson, downloadCsv, emptyState, md } from './admin-ui.js';
 
 await ensureSeed();
@@ -27,6 +29,7 @@ export const VIEWS = {
   analytics: { title: 'AI 분석', sub: 'A/B 변형 비교 · 시간대 히트맵 · 상위 질문' },
   knowledge: { title: '지식 베이스 (사전 응답)', sub: 'Gemini 호출 없이 즉시 응답 — 비용 0' },
   portal: { title: '클라이언트 포털', sub: '고객 계정 · 권한' },
+  calendar: { title: '캘린더', sub: '일정 · 메모 · 마감 · Google 캘린더 연동' },
   settings: { title: '설정', sub: '가격표 · 브랜드 · 팀멤버' },
 };
 
@@ -593,8 +596,14 @@ export function mountLeads() {
       e.preventDefault();
       if (!dragId) return;
       const stage = col.dataset.stage;
+      const before = store.leads.byId(dragId);
       store.leads.update(dragId, { status: stage });
       toast(`단계를 [${STAGE_LABELS[stage]}]로 변경했습니다`, 'success');
+      // 🤖 won 전환 hook
+      if (before && before.status !== 'won' && stage === 'won') {
+        const updated = store.leads.byId(dragId);
+        maybeAutoCreateProjectFromLead(updated);
+      }
       window.rerenderView?.();
     });
   });
@@ -675,11 +684,19 @@ function openLeadDrawer(id) {
       return;
     }
     if (isEdit) {
+      const before = store.leads.byId(id);
       store.leads.update(id, payload);
+      // 🤖 won 전환 hook
+      if (before && before.status !== 'won' && payload.status === 'won') {
+        const updated = store.leads.byId(id);
+        maybeAutoCreateProjectFromLead(updated);
+      }
       toast('리드가 저장되었습니다', 'success');
     } else {
-      store.leads.add({ ...payload, source: 'manual' });
-      toast('새 리드가 추가되었습니다', 'success');
+      const added = store.leads.add({ ...payload, source: 'manual' });
+      // 🤖 자동화 — lead.new 룰 발화 → emailDrafts에 draft 생성
+      const n = fireAutomation('lead.new', { name: added.name, email: added.email, phone: added.phone, leadId: added.id });
+      toast(n ? `새 리드 추가 + 자동 회신 ${n}건 draft 생성` : '새 리드가 추가되었습니다', 'success');
     }
     closeDrawer();
     window.rerenderView?.();
@@ -1127,6 +1144,60 @@ export function mountProjects() {
   $('#newProjectBtn')?.addEventListener('click', () => openProjectDrawer(null));
   $$('[data-action="open-project"]').forEach((el) => el.addEventListener('click', () => openProjectDrawer(el.dataset.id)));
 }
+/* ─── 🤖 won 전환 hook: 프로젝트·인보이스 30/40/30 자동 생성 (확인 후) ─── */
+function maybeAutoCreateProjectFromLead(lead) {
+  if (!lead) return;
+  // 이미 이 리드로 만들어진 프로젝트 있으면 skip
+  const existing = store.projects.all().find((p) => p && p.leadId === lead.id);
+  if (existing) {
+    toast(`이미 [${existing.name || lead.name}] 프로젝트가 연결되어 있습니다`, 'info');
+    return;
+  }
+  const yes = window.confirm(
+    `리드 [${lead.name || ''}]을(를) 완료(won)로 옮겼습니다.\n\n` +
+    `해당 리드로 프로젝트 + 인보이스 30/40/30 3건을 자동 생성할까요?\n` +
+    `(생성 후 [프로젝트 진행]·[결제/인보이스] 메뉴에서 세부 편집 가능)`
+  );
+  if (!yes) return;
+
+  const projectName = (lead.type ? `${lead.type} — ` : '') + (lead.name || '신규 프로젝트');
+  const proj = store.projects.add({
+    name: projectName,
+    clientName: lead.name || '',
+    summary: lead.message || '',
+    status: 'kickoff',
+    leadId: lead.id,
+    milestones: [
+      { label: '기획 · 계약', done: false },
+      { label: '디자인 · IA', done: false },
+      { label: '개발 1차', done: false },
+      { label: '검수 · 인도', done: false },
+    ],
+    reports: [],
+  });
+
+  // 인보이스 30/40/30 — 금액은 lead.budget 파싱 시도, 실패 시 0
+  const budgetRaw = String(lead.budget || '').replace(/[^\d]/g, '');
+  const budgetTotal = Number(budgetRaw) || 0;
+  const phases = [
+    { phase: '선금 30%', ratio: 0.30 },
+    { phase: '중도 40%', ratio: 0.40 },
+    { phase: '잔금 30%', ratio: 0.30 },
+  ];
+  phases.forEach((ph) => {
+    store.invoices.add({
+      projectId: proj.id,
+      clientName: lead.name || '',
+      phase: ph.phase,
+      amount: budgetTotal ? Math.round(budgetTotal * ph.ratio) : 0,
+      status: 'unpaid',
+      dueAt: '',
+    });
+  });
+
+  toast(`프로젝트 [${projectName}] + 인보이스 3건 자동 생성 완료`, 'success');
+}
+
 function openProjectDrawer(id) {
   const isEdit = !!id;
   const p = id ? store.projects.byId(id) : {
@@ -1863,6 +1934,7 @@ export function mountChatbot() {
   renderRules();
 
   // 30초 polling으로 다른 기기/AI 도구가 변경한 botRules를 자동 반영
+  // 🔧 mountChatbot N회 재진입 시 누적 등록 방지 — 이전 핸들러 제거 후 새로 등록
   const ruleSyncHandler = (e) => {
     if (e.detail?.key?.endsWith('.chatConfig')) {
       const latest = store.chatConfig.get();
@@ -1870,8 +1942,11 @@ export function mountChatbot() {
       renderRules();
     }
   };
+  if (window.__chatbotRuleSyncHandler) {
+    window.removeEventListener('store:change', window.__chatbotRuleSyncHandler);
+  }
+  window.__chatbotRuleSyncHandler = ruleSyncHandler;
   window.addEventListener('store:change', ruleSyncHandler);
-  // cleanup은 admin-views가 보통 unmount할 때 처리하지만 명시적 cleanup hook이 없으므로 기록만
 
   function renderIntents() {
     $('#cb_intents').innerHTML = intents.map((it, idx) => `
@@ -3240,7 +3315,8 @@ function _randToken() {
 }
 function openClientDrawer(id) {
   const isEdit = !!id;
-  const c = id ? store.clients.byId(id) : { name: '', email: '', company: '', password: '', projects: [] };
+  const c = id ? store.clients.byId(id) : { name: '', email: '', company: '', projects: [] };
+  const hasPwd = !!(c.passwordHash && c.salt);
   const allProjects = store.projects.all();
   openDrawer({
     title: isEdit ? '클라이언트 편집' : '+ 새 클라이언트',
@@ -3248,7 +3324,7 @@ function openClientDrawer(id) {
       <div class="adm-field"><label>이름</label><input id="cl_name" value="${escapeHtml(c.name||'')}"></div>
       <div class="adm-row">
         <div class="adm-field"><label>이메일 (로그인 ID)</label><input id="cl_email" type="email" value="${escapeHtml(c.email||'')}"></div>
-        <div class="adm-field"><label>비밀번호</label><input id="cl_pwd" type="text" value="${escapeHtml(c.password||'')}" placeholder="발급할 비밀번호"></div>
+        <div class="adm-field"><label>비밀번호 ${isEdit ? '<span style="color:var(--steel);font-weight:400;font-size:11px">' + (hasPwd ? '(비워두면 기존 유지)' : '(미설정 — 새로 입력)') + '</span>' : ''}</label><input id="cl_pwd" type="text" value="" placeholder="${isEdit && hasPwd ? '••••••••' : '발급할 비밀번호 (8자+)'}" autocomplete="off"></div>
       </div>
       <div class="adm-field"><label>회사</label><input id="cl_company" value="${escapeHtml(c.company||'')}"></div>
       <div class="adm-field">
@@ -3262,6 +3338,7 @@ function openClientDrawer(id) {
           `).join('')
         }
       </div>
+      <div style="margin-top:10px;padding:8px 10px;background:#f0f9ff;border-radius:6px;font-size:11px;color:#0369a1">🔐 비밀번호는 SHA-256 + 솔트로 해시되어 저장됩니다 (평문 저장 X).</div>
     `,
     footer: `
       ${isEdit ? '<button class="adm-btn danger" id="cl_delete">삭제</button>' : ''}
@@ -3269,16 +3346,25 @@ function openClientDrawer(id) {
       <button class="adm-btn" id="cl_save">저장</button>
     `,
   });
-  $('#cl_save').addEventListener('click', () => {
-    const projects = Array.from(document.querySelectorAll('[data-pid]:checked')).map(c => c.dataset.pid);
-    const payload = {
-      name: $('#cl_name').value.trim(),
-      email: $('#cl_email').value.trim(),
-      password: $('#cl_pwd').value,
+  $('#cl_save').addEventListener('click', async () => {
+    const projects = Array.from(document.querySelectorAll('[data-pid]:checked')).map((c) => c.dataset.pid);
+    const email = $('#cl_email').value.trim();
+    const name = $('#cl_name').value.trim();
+    const pwd = $('#cl_pwd').value;
+    if (!email) { toast('이메일은 필수입니다', 'error'); return; }
+    if (!name) { toast('이름은 필수입니다', 'error'); return; }
+    if (!isEdit && !pwd) { toast('비밀번호는 필수입니다', 'error'); return; }
+    if (pwd && pwd.length < 8) { toast('비밀번호는 8자 이상', 'error'); return; }
+    const base = {
+      name, email,
       company: $('#cl_company').value.trim(),
       projects,
     };
-    if (!payload.email || !payload.password) { toast('이메일과 비밀번호는 필수입니다', 'error'); return; }
+    let payload = base;
+    if (pwd) {
+      const { hash, salt } = await hashPassword(pwd);
+      payload = { ...base, passwordHash: hash, salt, password: undefined };
+    }
     if (isEdit) store.clients.update(id, payload);
     else store.clients.add(payload);
     toast('저장되었습니다', 'success');
@@ -3448,7 +3534,21 @@ export function renderSettings() {
 
     <div class="adm-card">
       <h3>데이터 관리</h3>
-      <div class="desc">현재 데이터는 브라우저 localStorage에 저장됩니다. 정기적으로 백업하세요.</div>
+      <div class="desc">현재 데이터는 브라우저 localStorage + Netlify Blobs(서버 동기화)에 저장됩니다.</div>
+
+      <h4 style="margin-top:14px;font-size:13px;color:var(--ink-deep,#1a1a1a)">🔐 Sync Token (다기기 동기화)</h4>
+      <div class="desc">
+        Netlify Site settings → Environment variables 에 설정한 <code>ADMIN_API_TOKEN</code> 값을 동일하게 입력하세요.
+        토큰이 비어있거나 일치하지 않으면 sync API가 거부되어 <b>이 브라우저 단독 모드</b>로 동작합니다 (다른 기기와 데이터 공유 X).
+      </div>
+      <div class="adm-row">
+        <div class="adm-field"><label>Sync Token</label><input id="st_syncToken" type="password" autocomplete="off" placeholder="ADMIN_API_TOKEN 값" value="${escapeHtml(_getSyncTokenSafe())}"></div>
+      </div>
+      <button class="adm-btn" id="st_syncSave">토큰 저장 + 재동기화</button>
+      <button class="adm-btn secondary" id="st_syncTest" style="margin-left:6px">연결 테스트</button>
+      <span id="st_syncStatus" style="margin-left:10px;font-size:12px;color:var(--steel)"></span>
+
+      <h4 style="margin-top:20px;font-size:13px;color:var(--ink-deep,#1a1a1a)">백업 / 복원</h4>
       <button class="adm-btn secondary" id="bkBtn">전체 백업 (JSON)</button>
       <button class="adm-btn secondary" id="rsBtn">백업에서 복원</button>
       <button class="adm-btn danger" id="clearBtn" style="float:right">모든 데이터 초기화</button>
@@ -3612,6 +3712,7 @@ export function mountSettings() {
     window.rerenderView?.();
   });
   $('#bkBtn')?.addEventListener('click', () => {
+    const lsGet = (k, def) => { try { return JSON.parse(localStorage.getItem(k) || JSON.stringify(def)); } catch { return def; } };
     const dump = {
       cases: store.cases.all(),
       faqs: store.faqs.all(),
@@ -3622,10 +3723,20 @@ export function mountSettings() {
       invoices: store.invoices.all(),
       clients: store.clients.all(),
       automations: store.automations.all(),
+      chatLogs: store.chatLogs.all(),
       chatConfig: store.chatConfig.get(),
       pricing: store.pricing.get(),
       settings: store.settings.get(),
+      scheduledTasks: store.scheduledTasks.all(),
+      usageLog: store.usageLog.all(),
+      frozenResponses: store.frozenResponses.all(),
+      emailDrafts: store.emailDrafts.all(),
+      calendarNotes: store.calendarNotes?.all?.() ?? [],
+      kbDocs:    lsGet('hamkkework.kbDocs.v1', []),
+      qrBrief:   lsGet('hamkkework.qrBrief.v1', null),
+      qrArchive: lsGet('hamkkework.qrArchive.v1', []),
       exportedAt: utils.nowIso(),
+      schemaVersion: 2,
     };
     downloadJson(dump, `hamkkework-${new Date().toISOString().slice(0,10)}.json`);
   });
@@ -3635,18 +3746,30 @@ export function mountSettings() {
     try {
       const data = JSON.parse(await f.text());
       if (!window.confirm('현재 데이터를 백업으로 덮어쓸까요? (계속하려면 OK)')) return;
-      if (data.cases) store.cases.setAll(data.cases);
-      if (data.faqs) store.faqs.setAll(data.faqs);
-      if (data.posts) store.posts.setAll(data.posts);
-      if (data.leads) store.leads.setAll(data.leads);
-      if (data.quotes) store.quotes.setAll(data.quotes);
-      if (data.projects) store.projects.setAll(data.projects);
-      if (data.invoices) store.invoices.setAll(data.invoices);
-      if (data.clients) store.clients.setAll(data.clients);
-      if (data.automations) store.automations.setAll(data.automations);
-      if (data.chatConfig) store.chatConfig.set(data.chatConfig);
-      if (data.pricing) store.pricing.set(data.pricing);
-      if (data.settings) store.settings.set(data.settings);
+      if (Array.isArray(data.cases)) store.cases.setAll(data.cases);
+      if (Array.isArray(data.faqs)) store.faqs.setAll(data.faqs);
+      if (Array.isArray(data.posts)) store.posts.setAll(data.posts);
+      if (Array.isArray(data.leads)) store.leads.setAll(data.leads);
+      if (Array.isArray(data.quotes)) store.quotes.setAll(data.quotes);
+      if (Array.isArray(data.projects)) store.projects.setAll(data.projects);
+      if (Array.isArray(data.invoices)) store.invoices.setAll(data.invoices);
+      if (Array.isArray(data.clients)) store.clients.setAll(data.clients);
+      if (Array.isArray(data.automations)) store.automations.setAll(data.automations);
+      if (Array.isArray(data.chatLogs)) store.chatLogs.setAll(data.chatLogs);
+      if (data.chatConfig && typeof data.chatConfig === 'object') store.chatConfig.set(data.chatConfig);
+      if (data.pricing && typeof data.pricing === 'object') store.pricing.set(data.pricing);
+      if (data.settings && typeof data.settings === 'object') store.settings.set(data.settings);
+      if (Array.isArray(data.scheduledTasks)) store.scheduledTasks.setAll(data.scheduledTasks);
+      if (Array.isArray(data.usageLog)) store.usageLog.setAll(data.usageLog);
+      if (Array.isArray(data.frozenResponses)) store.frozenResponses.setAll(data.frozenResponses);
+      if (Array.isArray(data.emailDrafts)) store.emailDrafts.setAll(data.emailDrafts);
+      if (Array.isArray(data.calendarNotes) && store.calendarNotes?.setAll) store.calendarNotes.setAll(data.calendarNotes);
+      if (Array.isArray(data.kbDocs)) localStorage.setItem('hamkkework.kbDocs.v1', JSON.stringify(data.kbDocs));
+      if (data.qrBrief !== undefined) {
+        if (data.qrBrief === null) localStorage.removeItem('hamkkework.qrBrief.v1');
+        else localStorage.setItem('hamkkework.qrBrief.v1', JSON.stringify(data.qrBrief));
+      }
+      if (Array.isArray(data.qrArchive)) localStorage.setItem('hamkkework.qrArchive.v1', JSON.stringify(data.qrArchive));
       toast('복원 완료', 'success');
       setTimeout(() => location.reload(), 800);
     } catch (err) {
@@ -3658,6 +3781,44 @@ export function mountSettings() {
     if (!window.confirm('한 번 더 확인합니다. 삭제하시겠습니까?')) return;
     localStorage.clear();
     location.reload();
+  });
+
+  /* ─── Sync Token ─── */
+  const setSyncStatus = (msg, color) => {
+    const el = $('#st_syncStatus');
+    if (!el) return;
+    el.textContent = msg || '';
+    el.style.color = color || 'var(--steel)';
+  };
+  $('#st_syncSave')?.addEventListener('click', async () => {
+    const t = $('#st_syncToken')?.value || '';
+    syncAuth.set(t);
+    if (!t) {
+      setSyncStatus('토큰 비움 — 다기기 동기화 OFF (이 브라우저 단독 모드)', '#92400e');
+      toast('Sync Token 제거됨 — 오프라인 모드', 'info');
+      return;
+    }
+    setSyncStatus('연결 확인 중…');
+    const r = await syncAuth.test();
+    if (r.ok) {
+      setSyncStatus('✅ 인증 성공 — 동기화 활성', '#15803d');
+      toast('Sync Token 저장 + 재동기화 시작', 'success');
+      try { await syncNow(); } catch {}
+    } else if (r.reason === 'unauthorized') {
+      setSyncStatus('❌ 인증 실패 (401) — 토큰이 Netlify env ADMIN_API_TOKEN과 일치하지 않습니다', '#dc2626');
+      toast('토큰 불일치 — Netlify env 값 확인', 'error');
+    } else {
+      setSyncStatus(`⚠️ 연결 실패 (${r.reason})`, '#dc2626');
+      toast('서버 연결 실패: ' + r.reason, 'error');
+    }
+  });
+  $('#st_syncTest')?.addEventListener('click', async () => {
+    setSyncStatus('확인 중…');
+    const r = await syncAuth.test();
+    if (r.ok) setSyncStatus('✅ 정상 응답 (200)', '#15803d');
+    else if (r.reason === 'token-empty') setSyncStatus('토큰이 비어있습니다', '#92400e');
+    else if (r.reason === 'unauthorized') setSyncStatus('❌ 401 — 토큰 불일치', '#dc2626');
+    else setSyncStatus(`⚠️ ${r.reason}`, '#dc2626');
   });
 }
 

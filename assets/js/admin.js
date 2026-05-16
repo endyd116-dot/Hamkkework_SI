@@ -201,10 +201,21 @@ $('#exportBtn')?.addEventListener('click', () => {
     invoices: store.invoices.all(),
     clients: store.clients.all(),
     automations: store.automations.all(),
+    chatLogs: store.chatLogs.all(),
     chatConfig: store.chatConfig.get(),
     pricing: store.pricing.get(),
     settings: store.settings.get(),
+    // 누락 보강 — 시드 외 사용자 데이터까지 모두 백업
+    scheduledTasks: store.scheduledTasks.all(),
+    usageLog: store.usageLog.all(),
+    frozenResponses: store.frozenResponses.all(),
+    emailDrafts: store.emailDrafts.all(),
+    calendarNotes: store.calendarNotes?.all?.() ?? [],
+    kbDocs: (() => { try { return JSON.parse(localStorage.getItem('hamkkework.kbDocs.v1') || '[]'); } catch { return []; } })(),
+    qrBrief: (() => { try { return JSON.parse(localStorage.getItem('hamkkework.qrBrief.v1') || 'null'); } catch { return null; } })(),
+    qrArchive: (() => { try { return JSON.parse(localStorage.getItem('hamkkework.qrArchive.v1') || '[]'); } catch { return []; } })(),
     exportedAt: new Date().toISOString(),
+    schemaVersion: 2,
   };
   const blob = new Blob([JSON.stringify(dump, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);

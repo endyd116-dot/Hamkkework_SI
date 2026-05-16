@@ -167,11 +167,32 @@ const SYNCED_KEYS = [
   'invoices', 'clients', 'automations', 'chatLogs', 'chatConfig',
   'settings', 'pricing', 'scheduledTasks', 'usageLog', 'frozenResponses',
   'adminCredentials', 'emailDrafts', 'calendarNotes',
+  // 답변생성 관련 (PPT/PDF + 브리프 + 보관함) — 다기기 동기화
+  'kbDocs', 'qrBrief', 'qrArchive',
 ];
 const SYNC_DEBOUNCE_MS = 800;
+// 🪶 자주 변하는 큰 컬렉션은 디바운스를 더 길게 (네트워크·대역폭 절감)
+const SYNC_DEBOUNCE_OVERRIDES = {
+  chatLogs: 5_000,
+  usageLog: 5_000,
+  qrArchive: 3_000,
+};
 const SYNC_POLL_MS = 30_000;
+const SYNC_TOKEN_LS_KEY = `${NS}.syncToken`;
 const pendingPushes = new Map();
 let serverWarned = false;
+let authWarned = false;
+
+// 🔐 sync API는 ADMIN_API_TOKEN 헤더 인증을 요구. 토큰이 없으면 sync 전체 비활성화 (오프라인 모드)
+function getSyncToken() {
+  try { return localStorage.getItem(SYNC_TOKEN_LS_KEY) || ''; }
+  catch { return ''; }
+}
+function syncHeaders(extra = {}) {
+  const t = getSyncToken();
+  return t ? { 'X-Admin-Token': t, ...extra } : { ...extra };
+}
+function syncEnabled() { return !!getSyncToken(); }
 
 function syncKeyFromLocal(localKey) {
   if (!localKey.startsWith(`${NS}.`)) return null;
@@ -180,8 +201,16 @@ function syncKeyFromLocal(localKey) {
 }
 
 async function syncPull(syncKey) {
+  if (!syncEnabled()) return null;
   try {
-    const r = await fetch(`/api/sync?key=${syncKey}`, { cache: 'no-store' });
+    const r = await fetch(`/api/sync?key=${syncKey}`, { cache: 'no-store', headers: syncHeaders() });
+    if (r.status === 401) {
+      if (!authWarned) {
+        authWarned = true;
+        console.warn('[sync] 인증 실패 (401) — [설정 → 데이터 관리]의 Sync Token이 Netlify env ADMIN_API_TOKEN과 일치하는지 확인하세요.');
+      }
+      return null;
+    }
     if (!r.ok) return null;
     const j = await r.json();
     return j.data ?? null;
@@ -195,13 +224,19 @@ async function syncPull(syncKey) {
 }
 
 async function syncPush(syncKey, data) {
+  if (!syncEnabled()) return;
   try {
     const r = await fetch(`/api/sync?key=${syncKey}`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: syncHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ data }),
     });
-    if (!r.ok) console.warn('[sync] push', syncKey, r.status);
+    if (r.status === 401 && !authWarned) {
+      authWarned = true;
+      console.warn('[sync] 인증 실패 (401) — Sync Token 확인 필요');
+    } else if (!r.ok) {
+      console.warn('[sync] push', syncKey, r.status);
+    }
   } catch (e) {
     console.warn('[sync] push error', syncKey, e?.message);
   }
@@ -210,15 +245,21 @@ async function syncPush(syncKey, data) {
 function schedulePush(syncKey, data) {
   const existing = pendingPushes.get(syncKey);
   if (existing) clearTimeout(existing);
+  const delay = SYNC_DEBOUNCE_OVERRIDES[syncKey] ?? SYNC_DEBOUNCE_MS;
   const tid = setTimeout(() => {
     pendingPushes.delete(syncKey);
     syncPush(syncKey, data);
-  }, SYNC_DEBOUNCE_MS);
+  }, delay);
   pendingPushes.set(syncKey, tid);
 }
 
 /** 페이지 닫을 때 대기 중인 push를 즉시 flush (sendBeacon으로 신뢰성↑) */
 function flushPendingPushes() {
+  if (!syncEnabled()) {
+    pendingPushes.clear();
+    return;
+  }
+  const token = getSyncToken();
   for (const [syncKey, tid] of pendingPushes) {
     clearTimeout(tid);
     const fullKey = KEYS[syncKey];
@@ -229,7 +270,8 @@ function flushPendingPushes() {
         [JSON.stringify({ data: val })],
         { type: 'application/json' }
       );
-      navigator.sendBeacon?.(`/api/sync?key=${syncKey}`, blob);
+      // sendBeacon은 헤더 첨부 불가 — token을 쿼리스트링으로 fallback
+      navigator.sendBeacon?.(`/api/sync?key=${syncKey}&token=${encodeURIComponent(token)}`, blob);
     } catch {}
   }
   pendingPushes.clear();
@@ -256,8 +298,12 @@ async function syncPullAll({ pushIfEmpty = false } = {}) {
       }
     } else if (pushIfEmpty) {
       // 서버에 데이터 없음 → 이 브라우저의 로컬 데이터를 마이그레이션 push
+      // 🛡 race 가드 — 빈 배열·빈 객체는 push 안 함 (시드 직전 호출 시 서버에 빈 값 덮어쓰기 방지)
       const local = read(fullKey);
-      if (local !== null && local !== undefined) {
+      const isEmpty = local == null
+        || (Array.isArray(local) && local.length === 0)
+        || (typeof local === 'object' && !Array.isArray(local) && Object.keys(local).length === 0);
+      if (!isEmpty) {
         syncPush(syncKey, local);
       }
     }
@@ -271,6 +317,75 @@ export async function syncNow() {
   if (changed) window.rerenderView?.();
   return changed;
 }
+
+/* ============================================================
+   🤖 자동화 룰 발화 — store.automations에 등록된 enabled 룰 매칭 시
+   emailDrafts에 draft 자동 생성. {{name}}/{{client}}/{{email}} 치환.
+   ============================================================ */
+export function fireAutomation(trigger, ctx = {}) {
+  try {
+    const rules = read(KEYS.automations, []).filter((r) => r && r.enabled && r.trigger === trigger);
+    if (!rules.length) return 0;
+    const drafts = read(KEYS.emailDrafts, []);
+    let added = 0;
+    for (const r of rules) {
+      const tpl = String(r.template || '');
+      const body = tpl.replace(/\{\{(\w+)\}\}/g, (_, k) => {
+        const v = ctx[k];
+        return v == null ? '' : String(v);
+      });
+      const subjectTpl = String(r.subject || r.name || trigger);
+      const subject = subjectTpl.replace(/\{\{(\w+)\}\}/g, (_, k) => String(ctx[k] ?? ''));
+      drafts.unshift({
+        id: uid('mail'),
+        createdAt: nowIso(),
+        status: 'draft',
+        trigger,
+        ruleId: r.id || null,
+        ruleName: r.name || '',
+        to: ctx.email || '',
+        toName: ctx.name || '',
+        subject,
+        body,
+        leadId: ctx.leadId || ctx.id || null,
+        quoteId: ctx.quoteId || null,
+        projectId: ctx.projectId || null,
+      });
+      added++;
+    }
+    if (added) {
+      write(KEYS.emailDrafts, drafts.slice(0, 500));
+      try { window.dispatchEvent(new CustomEvent('automation:fired', { detail: { trigger, count: added } })); } catch {}
+    }
+    return added;
+  } catch (e) {
+    console.warn('[automations] fire failed', trigger, e?.message);
+    return 0;
+  }
+}
+
+/** Sync Token 관리 — 설정 화면에서 호출 */
+export const syncAuth = {
+  get: () => getSyncToken(),
+  set: (token) => {
+    const t = (token || '').trim();
+    if (t) localStorage.setItem(SYNC_TOKEN_LS_KEY, t);
+    else localStorage.removeItem(SYNC_TOKEN_LS_KEY);
+    authWarned = false;
+    serverWarned = false;
+  },
+  enabled: () => syncEnabled(),
+  /** 서버에 핑 — 임의 키 GET으로 토큰 검증 */
+  async test() {
+    if (!syncEnabled()) return { ok: false, status: 0, reason: 'token-empty' };
+    try {
+      const r = await fetch('/api/sync?key=settings', { cache: 'no-store', headers: syncHeaders() });
+      return { ok: r.ok, status: r.status, reason: r.ok ? 'ok' : (r.status === 401 ? 'unauthorized' : 'http-error') };
+    } catch (e) {
+      return { ok: false, status: 0, reason: 'network-error', detail: e?.message };
+    }
+  },
+};
 
 /* ============================================================
    Seed loader — runs once
