@@ -1639,13 +1639,42 @@ function openFaqDrawer(id) {
 export function renderChatbot() {
   const cfg = store.chatConfig.get();
   const logs = store.chatLogs.all();
+  const _brief = _qrBrief.get();
+  const _kbCount = _kbDocs.all().length;
+  const briefStatusCard = _brief?.text
+    ? `<div class="adm-card" style="border-left:4px solid #15803d;background:linear-gradient(90deg,#dcfce7,var(--canvas) 40%)">
+         <h3 style="display:flex;align-items:center;gap:8px;margin:0">
+           📚 회사 브리프 챗봇 반영 중
+           <span style="font-size:11px;font-weight:700;color:#15803d;padding:3px 8px;background:#fff;border-radius:999px">ON</span>
+         </h3>
+         <div class="desc" style="margin-top:8px">
+           [고객요청 답변생성 → 0) 회사 브리프]에서 만든 ${_brief.text.length.toLocaleString()}자 요약본이 챗봇 시스템 프롬프트의 정적 영역에 들어가 모든 답변에 반영됩니다.
+           ${_kbCount > 0 ? `<b>업로드된 PPT/PDF ${_kbCount}건의 내용도 이 브리프를 통해 챗봇이 인용할 수 있습니다.</b>` : ''}
+           Gemini Implicit Caching으로 두 번째 호출부터 입력 토큰의 약 75%가 캐시 비용으로 처리됩니다.
+           <br>마지막 갱신: <b>${_qrTimeAgo(_brief.generatedAt)}</b>${_brief.caseCount ? ` · 사례 ${_brief.caseCount}건` : ''}${_brief.homepageBytes ? ` · 홈페이지 ${_brief.homepageBytes.toLocaleString()}자` : ''}
+         </div>
+         <div style="margin-top:8px"><a href="#quoteResponder" data-cb-go-qr style="color:var(--cobalt);font-weight:600;font-size:12px">브리프 재생성·편집 →</a></div>
+       </div>`
+    : `<div class="adm-card" style="border-left:4px solid #f59e0b;background:#fffbeb">
+         <h3 style="display:flex;align-items:center;gap:8px;margin:0">
+           📚 회사 브리프 미생성
+           <span style="font-size:11px;font-weight:700;color:#92400e;padding:3px 8px;background:#fef3c7;border-radius:999px">OFF</span>
+         </h3>
+         <div class="desc" style="margin-top:8px">
+           브리프를 생성하면 회사 소개·연혁·업로드된 PPT/PDF의 핵심 내용이 챗봇 답변에 반영됩니다.
+           시스템 프롬프트 정적 영역에 캐시되므로 호출당 비용은 거의 늘지 않습니다.
+         </div>
+         <div style="margin-top:10px"><a href="#quoteResponder" data-cb-go-qr class="adm-btn">+ 회사 브리프 생성 →</a></div>
+       </div>`;
   return `
+    ${briefStatusCard}
+
     <div class="adm-card">
       <h3>🤖 Gemini AI 챗봇 — 연결 상태
         <button class="adm-btn sm secondary" id="cb_testApi">API 테스트</button>
       </h3>
       <div class="desc">
-        메인페이지 우하단의 챗봇이 <b>Gemini 3.0 Flash</b>에 연결되어 플랫폼의 모든 정보(가격표·케이스·FAQ·약속·프로세스)를 컨텍스트로 답변합니다.
+        메인페이지 우하단의 챗봇이 <b>Gemini 3.0 Flash</b>에 연결되어 플랫폼의 모든 정보(가격표·케이스·FAQ·약속·프로세스${_brief?.text ? ' + <b>회사 브리프</b>(PPT/PDF 포함)' : ''})를 컨텍스트로 답변합니다.
         Gemini API 호출이 실패할 경우 자동으로 아래 규칙 기반(인텐트)으로 폴백합니다.
       </div>
       <div id="cb_status" style="padding:14px;border-radius:var(--r-md);background:var(--surface-soft);font-size:13px;line-height:1.6">
@@ -1717,6 +1746,12 @@ export function renderChatbot() {
   `;
 }
 export function mountChatbot() {
+  document.querySelector('[data-cb-go-qr]')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    location.hash = '#quoteResponder';
+    if (typeof window.rerenderView === 'function') window.rerenderView();
+  });
+
   const cfg = store.chatConfig.get();
   let intents = [...(cfg.intents || [])];
 

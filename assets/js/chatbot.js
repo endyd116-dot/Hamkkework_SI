@@ -926,6 +926,14 @@ async function askGemini({ onToken, onToolCall, onToolResult } = {}) {
 
   // 💡 운영자 데이터(chatLogs/leads/scheduledTasks)는 더 이상 전송하지 않음 —
   //   서버가 Function Calling으로 직접 Netlify Blobs에서 조회 (토큰 -60%)
+  // 📚 회사 브리프 — PM이 [고객요청 답변생성]에서 한 번 생성해 캐시한 압축본 (kbDocs 포함).
+  //   매 호출 정적 영역(systemInstruction)에 들어가 Gemini Implicit Caching으로 -75% 입력 토큰.
+  let companyBrief = '';
+  try {
+    const _b = JSON.parse(localStorage.getItem('hamkkework.qrBrief.v1') || 'null');
+    if (_b && typeof _b.text === 'string' && _b.text.length > 100) companyBrief = _b.text;
+  } catch {}
+
   const context = {
     cases: store.cases.all(),
     faqs: store.faqs.all(),
@@ -934,6 +942,7 @@ async function askGemini({ onToken, onToolCall, onToolResult } = {}) {
     posts: store.posts.all().filter((p) => p.published !== false).map((p) => ({
       title: p.title, excerpt: p.excerpt, published_at: p.published_at,
     })),
+    companyBrief,
   };
 
   const cfg = store.chatConfig.get();

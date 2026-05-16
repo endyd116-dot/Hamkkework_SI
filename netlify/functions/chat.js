@@ -592,6 +592,7 @@ function buildSystemPrompt(context, extra, mode = {}) {
   const {
     cases = [], faqs = [], pricing = {}, settings = {}, posts = [],
     chatLogs = [], leads = [], scheduledTasks = [],
+    companyBrief = '',
   } = context;
 
   const company = `
@@ -665,6 +666,15 @@ ${faqs.slice(0, 10).map((f) => `Q: ${f.q} / A: ${f.a}`).join('\n')}
   const blogList = posts.length > 0 ? `
 ## 블로그 (${posts.length}건)
 ${posts.filter((p) => p.published !== false).slice(0, 6).map((p) => `- ${p.title}`).join('\n')}
+` : '';
+
+  // 📚 회사 심층 자료 (PM 큐레이션 브리프 — kbDocs 포함, 약 1500자 압축본)
+  // staticPrompt에 들어가므로 Gemini Implicit Caching 발동 → 동일 브리프 반복 호출 시 -75% 입력
+  const briefBlock = (typeof companyBrief === 'string' && companyBrief.trim().length > 100) ? `
+## 회사 심층 자료 (PM 큐레이션 브리프) — 신뢰도 최상
+※ 회사 소개서·사업제안서·내부 자료 등을 PM이 큐레이션한 압축본입니다. 회사·경력·강점·세부 사례·기술스택·연계 가능 영역을 묻는 질문엔 **이 섹션을 가장 신뢰도 높은 출처로 우선 참조**하세요. 위쪽 레퍼런스·FAQ·가격표와 충돌하면 이 섹션 내용을 우선합니다.
+
+${companyBrief.trim()}
 ` : '';
 
   const processStr = `
@@ -855,6 +865,7 @@ ${pricingTable}
 ${caseList}
 ${faqList}
 ${blogList}
+${briefBlock}
 ${processStr}
 ${tools}
 ${adminToolsStatic}
