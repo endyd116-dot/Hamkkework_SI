@@ -2423,7 +2423,19 @@ export function renderKnowledge() {
     .sort((a, b) => b[1] - a[1])
     .slice(0, 5);
 
+  const kbDocsList = _kbDocs.all();
+
   return `
+    <div class="adm-card" style="border-left:4px solid #15803d">
+      <h3 style="display:flex;align-items:center;gap:8px">
+        📚 업로드된 지식 문서
+        <span style="font-size:11px;font-weight:500;padding:3px 8px;border-radius:999px;${kbDocsList.length ? 'color:#15803d;background:#dcfce7' : 'color:var(--steel);background:rgba(0,0,0,.04)'}">${kbDocsList.length}건 ON</span>
+      </h3>
+      <div class="desc">PM이 [설정 → 지식 문서 업로드]에서 올린 PPT/PDF의 추출 텍스트입니다. [고객요청 답변생성] 회사 브리프 재생성 시 자동 반영됩니다.</div>
+      <div id="kb_list_kb" style="margin-top:10px">${_kbRenderList({ readonly: false })}</div>
+      ${kbDocsList.length < KB_MAX_DOCS ? `<div style="margin-top:8px;font-size:12px"><a href="#settings" data-kb-go-settings style="color:var(--cobalt);font-weight:600">＋ 설정에서 새 문서 업로드 →</a></div>` : ''}
+    </div>
+
     <div class="adm-card" style="border-left:4px solid var(--success);background:linear-gradient(90deg,var(--success-soft),var(--canvas) 30%)">
       <h3>💰 사전 응답 캐시 효과
         <span style="font-size:12px;font-weight:400;color:var(--steel)">${items.length}개 등록 · 누적 적중 ${totalHits}회</span>
@@ -2514,6 +2526,18 @@ export function renderKnowledge() {
 }
 
 export function mountKnowledge() {
+  const refreshKbList = () => {
+    const el = $('#kb_list_kb');
+    if (el) el.innerHTML = _kbRenderList({ readonly: false });
+    _kbBindListHandlers(refreshKbList);
+  };
+  _kbBindListHandlers(refreshKbList);
+  document.querySelector('[data-kb-go-settings]')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    location.hash = '#settings';
+    if (typeof window.rerenderView === 'function') window.rerenderView();
+  });
+
   $('#newFrozenBtn')?.addEventListener('click', () => openFrozenDrawer(null));
   $$('[data-edit-frozen]').forEach((b) => b.addEventListener('click', () => openFrozenDrawer(b.dataset.editFrozen)));
   $$('[data-del-frozen]').forEach((b) => b.addEventListener('click', () => {
@@ -3324,6 +3348,29 @@ export function renderSettings() {
       <button class="adm-btn" id="st_save">저장</button>
     </div>
 
+    <div class="adm-card" style="border-left:4px solid #15803d">
+      <h3 style="display:flex;align-items:center;gap:8px">
+        📚 지식 문서 업로드 (PPT / PDF)
+        <span style="font-size:11px;font-weight:500;color:var(--steel);padding:3px 8px;background:rgba(0,0,0,.04);border-radius:999px">최대 ${KB_MAX_DOCS}건 · 회사 브리프 자동 반영</span>
+      </h3>
+      <div class="desc">
+        회사 소개서·사업제안서·케이스 자료 등을 업로드하면 텍스트를 추출해 지식 베이스에 저장합니다.
+        이후 <b>[고객요청 답변생성] → 0) 회사 브리프 재생성</b> 시 자동으로 함께 반영됩니다.
+        PPT는 <b>.pptx</b> 형식만 지원 (구버전 .ppt는 PowerPoint에서 .pptx로 저장 후 업로드).
+        이미지·스캔본 위주 PDF는 텍스트 추출이 어려울 수 있습니다.
+      </div>
+      <input type="file" id="kb_file" accept=".pdf,.pptx,application/pdf,application/vnd.openxmlformats-officedocument.presentationml.presentation" style="display:none">
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:8px">
+        <button class="adm-btn" id="kb_pickBtn">📎 파일 선택 (PDF / PPTX)</button>
+        <span id="kb_uploadStatus" style="font-size:12px;color:var(--steel)"></span>
+      </div>
+      <div id="kb_list" style="margin-top:14px">${_kbRenderList({ readonly: false })}</div>
+      <div style="margin-top:10px;font-size:11px;color:var(--steel);line-height:1.6">
+        ※ 파일은 브라우저 localStorage에 텍스트로만 저장됩니다 (원본 파일 X). 각 문서 최대 ${(KB_MAX_TEXT_CHARS/1000).toFixed(0)}KB 텍스트, 파일 사이즈 30MB 한도.<br>
+        ※ <b>업데이트가 필요한 경우</b>: 기존 ON 문서를 [삭제] 후, 새 버전을 [파일 선택]으로 다시 업로드해 주세요.
+      </div>
+    </div>
+
     <div class="adm-card">
       <h3>가격표 (견적 계산기 단가)</h3>
       <div class="desc">메인페이지의 [Pricing] 계산기와 어드민 견적서에 즉시 반영됩니다. 단위는 만원입니다.</div>
@@ -3448,6 +3495,42 @@ export function mountSettings() {
       company_history: $('#st_history')?.value.trim() || '',
     });
     toast('설정이 저장되었습니다', 'success');
+  });
+
+  /* ─── 지식 문서 업로드 ─── */
+  const refreshKbList = () => {
+    const el = $('#kb_list');
+    if (el) el.innerHTML = _kbRenderList({ readonly: false });
+    _kbBindListHandlers(refreshKbList);
+  };
+  _kbBindListHandlers(refreshKbList);
+
+  $('#kb_pickBtn')?.addEventListener('click', () => $('#kb_file')?.click());
+  $('#kb_file')?.addEventListener('change', async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const setSt = (m) => { const el = $('#kb_uploadStatus'); if (el) el.textContent = m || ''; };
+    if (_kbDocs.all().length >= KB_MAX_DOCS) {
+      toast(`최대 ${KB_MAX_DOCS}건까지 업로드할 수 있습니다. 기존 문서를 먼저 삭제해 주세요.`, 'error');
+      e.target.value = '';
+      return;
+    }
+    const btn = $('#kb_pickBtn');
+    btn.disabled = true;
+    setSt('업로드 준비 중…');
+    try {
+      const doc = await _kbHandleFile(file, setSt);
+      _kbDocs.add(doc);
+      toast(`"${doc.name}" 업로드 완료 — 지식 베이스 ON`, 'success');
+      setSt(`완료 · ${doc.charCount.toLocaleString()}자 추출`);
+      refreshKbList();
+    } catch (err) {
+      toast('업로드 실패: ' + (err?.message || err), 'error');
+      setSt('');
+    } finally {
+      e.target.value = '';
+      btn.disabled = false;
+    }
   });
   $('#pr_save')?.addEventListener('click', () => {
     const existing = store.pricing.get() || {};
@@ -3583,6 +3666,172 @@ function _qrPickCases(requestText, limit = 3) {
   return [...all].sort((a, b) => (b.year || 0) - (a.year || 0)).slice(0, limit);
 }
 
+/* ─── 지식 문서 (PPT/PDF 업로드) — localStorage ─── */
+const KB_DOCS_KEY = 'hamkkework.kbDocs.v1';
+const KB_MAX_DOCS = 5;
+const KB_MAX_TEXT_CHARS = 60000;
+
+const _kbDocs = {
+  all() {
+    try { return JSON.parse(localStorage.getItem(KB_DOCS_KEY) || '[]'); }
+    catch { return []; }
+  },
+  add(doc) {
+    const list = _kbDocs.all();
+    list.unshift(doc);
+    while (list.length > KB_MAX_DOCS) list.pop();
+    localStorage.setItem(KB_DOCS_KEY, JSON.stringify(list));
+  },
+  remove(id) {
+    const list = _kbDocs.all().filter((d) => d.id !== id);
+    localStorage.setItem(KB_DOCS_KEY, JSON.stringify(list));
+  },
+};
+
+function _kbFmtSize(b) {
+  if (b < 1024) return b + 'B';
+  if (b < 1024 * 1024) return (b / 1024).toFixed(1) + 'KB';
+  return (b / 1024 / 1024).toFixed(1) + 'MB';
+}
+
+function _kbLoadScript(url, globalKey) {
+  if (globalKey && window[globalKey]) return Promise.resolve(window[globalKey]);
+  return new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = url;
+    s.async = true;
+    s.onload = () => resolve(globalKey ? window[globalKey] : null);
+    s.onerror = () => reject(new Error('스크립트 로드 실패: ' + url));
+    document.head.appendChild(s);
+  });
+}
+
+async function _kbExtractPdfText(file, onProgress) {
+  await _kbLoadScript('https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js', 'pdfjsLib');
+  const pdfjs = window.pdfjsLib;
+  pdfjs.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js';
+  const buf = await file.arrayBuffer();
+  const pdf = await pdfjs.getDocument({ data: buf }).promise;
+  let text = '';
+  let truncated = false;
+  for (let i = 1; i <= pdf.numPages; i++) {
+    if (onProgress) onProgress(`PDF 페이지 ${i}/${pdf.numPages} 추출 중…`);
+    const page = await pdf.getPage(i);
+    const content = await page.getTextContent();
+    text += content.items.map((it) => it.str || '').join(' ') + '\n\n';
+    if (text.length > KB_MAX_TEXT_CHARS) {
+      text = text.slice(0, KB_MAX_TEXT_CHARS) + '\n[…이하 생략 — 길이 한도]';
+      truncated = true;
+      break;
+    }
+  }
+  return { text: text.trim(), truncated };
+}
+
+async function _kbExtractPptxText(file, onProgress) {
+  await _kbLoadScript('https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js', 'JSZip');
+  if (onProgress) onProgress('PPTX 압축 해제 중…');
+  const zip = await window.JSZip.loadAsync(file);
+  const slideFiles = Object.keys(zip.files)
+    .filter((k) => /^ppt\/slides\/slide\d+\.xml$/.test(k))
+    .sort((a, b) => {
+      const na = Number(a.match(/slide(\d+)/)[1]);
+      const nb = Number(b.match(/slide(\d+)/)[1]);
+      return na - nb;
+    });
+  let text = '';
+  let truncated = false;
+  for (let i = 0; i < slideFiles.length; i++) {
+    if (onProgress) onProgress(`슬라이드 ${i + 1}/${slideFiles.length} 추출 중…`);
+    const xml = await zip.files[slideFiles[i]].async('string');
+    const matches = xml.match(/<a:t[^>]*>([\s\S]*?)<\/a:t>/g) || [];
+    const slideText = matches
+      .map((m) => m.replace(/<a:t[^>]*>([\s\S]*?)<\/a:t>/, '$1'))
+      .map((s) => s.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'"))
+      .join(' ');
+    if (slideText.trim()) text += `[슬라이드 ${i + 1}] ${slideText}\n\n`;
+    if (text.length > KB_MAX_TEXT_CHARS) {
+      text = text.slice(0, KB_MAX_TEXT_CHARS) + '\n[…이하 생략 — 길이 한도]';
+      truncated = true;
+      break;
+    }
+  }
+  return { text: text.trim(), truncated };
+}
+
+async function _kbHandleFile(file, onProgress) {
+  const name = file.name || 'untitled';
+  const lower = name.toLowerCase();
+  const type = lower.endsWith('.pdf') ? 'pdf' : lower.endsWith('.pptx') ? 'pptx' : null;
+  if (!type) throw new Error('PDF 또는 PPTX만 가능 (.ppt는 PowerPoint에서 .pptx로 저장 후 업로드)');
+  if (file.size > 30 * 1024 * 1024) throw new Error('파일이 너무 큽니다 (30MB 한도)');
+  const { text, truncated } = type === 'pdf'
+    ? await _kbExtractPdfText(file, onProgress)
+    : await _kbExtractPptxText(file, onProgress);
+  if (!text || text.length < 30) {
+    throw new Error('텍스트를 추출하지 못했습니다 (이미지·스캔본 위주 문서이거나 보호된 파일일 수 있음)');
+  }
+  return {
+    id: 'kb_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+    name,
+    type,
+    size: file.size,
+    uploadedAt: new Date().toISOString(),
+    text,
+    truncated,
+    charCount: text.length,
+  };
+}
+
+function _kbRenderList({ readonly = false } = {}) {
+  const docs = _kbDocs.all();
+  if (!docs.length) {
+    return `<div style="padding:14px 16px;border:1px dashed var(--line);border-radius:8px;font-size:12px;color:var(--steel);text-align:center">아직 업로드된 지식 문서가 없습니다.${readonly ? ' [설정 → 지식 문서 업로드]에서 PDF/PPTX를 올릴 수 있습니다.' : ' 위 [파일 선택]에서 PDF/PPTX를 올려 주세요.'}</div>`;
+  }
+  return docs.map((d) => `
+    <div style="display:flex;align-items:center;gap:10px;padding:10px 14px;border:1px solid var(--line);border-radius:8px;margin-bottom:6px;background:#fff">
+      <span style="font-size:11px;font-weight:800;padding:3px 10px;background:#dcfce7;color:#15803d;border-radius:999px;letter-spacing:.04em">● ON</span>
+      <span style="font-size:10px;font-weight:700;padding:2px 7px;border-radius:4px;text-transform:uppercase;${d.type === 'pdf' ? 'background:#fee2e2;color:#b91c1c' : 'background:#fef3c7;color:#92400e'}">${d.type}</span>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:13px;font-weight:600;color:var(--ink-deep);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escapeHtml(d.name)}">${escapeHtml(d.name)}</div>
+        <div style="font-size:11px;color:var(--steel);margin-top:2px">${_kbFmtSize(d.size)} · 추출 ${(d.charCount || 0).toLocaleString()}자${d.truncated ? ' (일부 생략)' : ''} · ${_qrTimeAgo(d.uploadedAt)}</div>
+      </div>
+      <button class="adm-btn secondary" data-kb-preview="${d.id}" style="padding:4px 10px;font-size:11px">미리보기</button>
+      <button class="adm-btn secondary" data-kb-remove="${d.id}" style="padding:4px 10px;font-size:11px;color:#dc2626">삭제</button>
+    </div>
+  `).join('');
+}
+
+function _kbBindListHandlers(onChange) {
+  $$('[data-kb-remove]').forEach((b) => {
+    b.addEventListener('click', () => {
+      const id = b.dataset.kbRemove;
+      const doc = _kbDocs.all().find((d) => d.id === id);
+      if (!doc) return;
+      if (!window.confirm(`"${doc.name}"를 삭제하시겠습니까?\n\n다음 [회사 브리프 재생성]부터 반영에서 제외됩니다.`)) return;
+      _kbDocs.remove(id);
+      toast('삭제했습니다');
+      if (onChange) onChange();
+    });
+  });
+  $$('[data-kb-preview]').forEach((b) => {
+    b.addEventListener('click', () => {
+      const id = b.dataset.kbPreview;
+      const doc = _kbDocs.all().find((d) => d.id === id);
+      if (!doc) return;
+      openDrawer({
+        title: `📄 ${doc.name}`,
+        body: `
+          <div style="font-size:12px;color:var(--steel);margin-bottom:12px;padding-bottom:10px;border-bottom:1px solid var(--line)">
+            ${doc.type.toUpperCase()} · ${_kbFmtSize(doc.size)} · 추출 ${(doc.charCount || 0).toLocaleString()}자${doc.truncated ? ' (일부 생략됨)' : ''} · ${_qrTimeAgo(doc.uploadedAt)}
+          </div>
+          <pre style="white-space:pre-wrap;font-family:inherit;font-size:13px;line-height:1.7;padding:14px;background:#fafafa;border-radius:8px;max-height:60vh;overflow:auto;margin:0">${escapeHtml(doc.text)}</pre>
+        `,
+      });
+    });
+  });
+}
+
 /* ─── 회사 브리프 — localStorage 캐시 ─── */
 const QR_BRIEF_KEY = 'hamkkework.qrBrief.v1';
 const _qrBrief = {
@@ -3707,6 +3956,13 @@ async function _qrBuildBriefViaAI({ extras, signal, onProgress }) {
     '- 출력 외 머리말·설명·코드블록 금지. 위 헤더부터 바로 시작.',
   ].join('\n');
 
+  const kbDocs = _kbDocs.all();
+  if (onProgress && kbDocs.length) onProgress(`업로드된 지식 문서 ${kbDocs.length}건 포함됨. AI 압축 중…`);
+  const kbBlock = kbDocs.length
+    ? `[RAW] 업로드된 지식 문서 (${kbDocs.length}건 — PM이 직접 올린 PPT/PDF에서 추출)\n` +
+      kbDocs.map((d) => `### 📄 ${d.name} (${d.type.toUpperCase()})\n${d.text}`).join('\n\n')
+    : '';
+
   const rawBlocks = [
     '[RAW] 회사 설정',
     `브랜드: ${settings.brand || ''} / 대표 PM: ${settings.pm || ''} / 이메일: ${settings.email || ''} / 연락처: ${settings.phone || ''}`,
@@ -3721,6 +3977,7 @@ async function _qrBuildBriefViaAI({ extras, signal, onProgress }) {
     faqs.slice(0, 8).map((f) => `Q. ${f.question || f.q || ''}\nA. ${(f.answer || f.a || '').slice(0, 180)}`).join('\n\n'),
     '',
     homepage ? `[RAW] 홈페이지 본문 (텍스트 추출, 최대 5000자)\n${homepage}` : '',
+    kbBlock,
     extras ? `[RAW] PM 추가 메모 (강점·수상·인증·차별점 등)\n${extras}` : '',
   ].filter(Boolean).join('\n\n');
 
@@ -3860,6 +4117,10 @@ export function renderQuoteResponder() {
   const briefMeta = brief
     ? `사례 ${brief.caseCount || 0}건 · FAQ ${brief.faqCount || 0}건 · 홈페이지 ${brief.homepageBytes || 0}자 · 추가메모 ${brief.notesLen || 0}자`
     : '';
+  const kbCount = _kbDocs.all().length;
+  const kbBadge = kbCount
+    ? `<span style="font-size:11px;font-weight:600;padding:3px 8px;background:#dcfce7;color:#15803d;border-radius:999px;margin-left:6px">📄 지식 문서 ${kbCount}건 ON</span>`
+    : '';
 
   return `
     <div class="adm-card" style="border-left:4px solid var(--cobalt)">
@@ -3882,7 +4143,7 @@ export function renderQuoteResponder() {
     <div class="adm-card" id="qr_briefCard" style="${brief ? '' : 'border:1px dashed #f59e0b;background:#fffbeb'}">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap">
         <div>
-          <h3 style="margin:0">0) 회사 브리프 ${brief ? '<span style="font-size:11px;font-weight:500;color:#15803d;padding:3px 8px;background:#dcfce7;border-radius:999px;margin-left:6px">활성</span>' : '<span style="font-size:11px;font-weight:500;color:#92400e;padding:3px 8px;background:#fef3c7;border-radius:999px;margin-left:6px">미생성</span>'}</h3>
+          <h3 style="margin:0">0) 회사 브리프 ${brief ? '<span style="font-size:11px;font-weight:500;color:#15803d;padding:3px 8px;background:#dcfce7;border-radius:999px;margin-left:6px">활성</span>' : '<span style="font-size:11px;font-weight:500;color:#92400e;padding:3px 8px;background:#fef3c7;border-radius:999px;margin-left:6px">미생성</span>'}${kbBadge}</h3>
           <div class="desc" style="margin-top:6px">
             AI가 우리 회사 설정·포트폴리오·FAQ·홈페이지 본문·PM 메모를 한 번 조사해 <b>~1500자 마크다운 브리프</b>로 압축합니다.
             이후 모든 답변 생성은 이 브리프만 참조 — 매 호출마다 raw 데이터를 재포장하지 않으므로 토큰을 크게 절감합니다.
