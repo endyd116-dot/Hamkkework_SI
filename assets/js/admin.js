@@ -114,6 +114,7 @@ const VIEW_FNS = {
   faqs: { render: Views.renderFaqs, mount: Views.mountFaqs },
   chatbot: { render: Views.renderChatbot, mount: Views.mountChatbot },
   automation: { render: Views.renderAutomation, mount: Views.mountAutomation },
+  quoteResponder: { render: Views.renderQuoteResponder, mount: Views.mountQuoteResponder },
   kpi: { render: Views.renderKpi, mount: Views.mountKpi },
   analytics: { render: Views.renderAnalytics, mount: Views.mountAnalytics },
   knowledge: { render: Views.renderKnowledge, mount: Views.mountKnowledge },
