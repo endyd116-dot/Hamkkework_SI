@@ -3867,6 +3867,114 @@ function _kbBindListHandlers(onChange) {
   });
 }
 
+/* ─── 답변 생성 보관함 — localStorage ─── */
+const QR_ARCHIVE_KEY = 'hamkkework.qrArchive.v1';
+const QR_ARCHIVE_MAX = 100;
+
+const _qrArchive = {
+  all() {
+    try { return JSON.parse(localStorage.getItem(QR_ARCHIVE_KEY) || '[]'); }
+    catch { return []; }
+  },
+  add(item) {
+    const list = _qrArchive.all();
+    list.unshift(item);
+    while (list.length > QR_ARCHIVE_MAX) list.pop();
+    localStorage.setItem(QR_ARCHIVE_KEY, JSON.stringify(list));
+  },
+  remove(id) {
+    const list = _qrArchive.all().filter((x) => x.id !== id);
+    localStorage.setItem(QR_ARCHIVE_KEY, JSON.stringify(list));
+  },
+  clear() { localStorage.removeItem(QR_ARCHIVE_KEY); },
+};
+
+function _qrFmtWhen(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  const now = new Date();
+  const time = String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+  const sameDay = d.toDateString() === now.toDateString();
+  const yest = new Date(now); yest.setDate(yest.getDate() - 1);
+  const isYesterday = d.toDateString() === yest.toDateString();
+  if (sameDay) return `오늘 ${time}`;
+  if (isYesterday) return `어제 ${time}`;
+  if (d.getFullYear() === now.getFullYear()) return `${d.getMonth() + 1}월 ${d.getDate()}일 ${time}`;
+  return `${d.getFullYear()}.${d.getMonth() + 1}.${d.getDate()} ${time}`;
+}
+
+function _qrDeriveTitle(requestText) {
+  if (!requestText) return '제목 없음';
+  // 첫 의미있는 줄 (5자 이상) → 그게 너무 짧으면 다음 줄도 포함
+  const lines = requestText.split(/\r?\n/).map((l) => l.trim()).filter((l) => l.length >= 4);
+  let title = lines[0] || requestText.trim();
+  if (title.length < 12 && lines[1]) title += ' · ' + lines[1];
+  title = title.replace(/^안녕하세요[,.\s]*/, '').replace(/\s+/g, ' ').trim();
+  if (title.length > 56) title = title.slice(0, 56) + '…';
+  return title || '제목 없음';
+}
+
+function _qrDeriveTags(text) {
+  const t = String(text || '');
+  const PAT = [
+    ['Shopify',    /shopify/i],
+    ['쇼핑몰',     /쇼핑몰|커머스|e-?commerce|스토어|cafe24/i],
+    ['예약',       /예약|booking|reserv/i],
+    ['결제/PG',    /결제|payment|토스페이먼츠|PG\b/i],
+    ['모바일',     /\b앱\b|모바일|ios|android|react\s*native|flutter/i],
+    ['AI 자동화',  /자동\s*화|automation|에이전트|workflow/i],
+    ['LLM/RAG',   /LLM|GPT|Claude|RAG|챗봇|chatbot|벡터|임베딩/i],
+    ['데이터',     /데이터|대시보드|BI|분석|리포트/i],
+    ['ERP/연동',   /ERP|SSO|연동|integration|API/i],
+    ['CRM',        /CRM|회원|고객\s*관리/i],
+    ['홈페이지',   /홈페이지|랜딩|웹사이트|랜팅/i],
+    ['관리자',     /어드민|admin|관리자|백오피스/i],
+    ['ML',         /머신러닝|ML|딥러닝|모델/i],
+  ];
+  const out = [];
+  for (const [name, re] of PAT) {
+    if (re.test(t) && !out.includes(name)) out.push(name);
+    if (out.length >= 3) break;
+  }
+  return out;
+}
+
+function _qrRenderArchiveList() {
+  const list = _qrArchive.all();
+  if (!list.length) {
+    return `<div style="padding:18px 16px;border:1px dashed var(--line);border-radius:8px;font-size:12px;color:var(--steel);text-align:center">아직 보관된 답변이 없습니다. 답변문을 생성하면 자동으로 여기에 쌓입니다 (최근 ${QR_ARCHIVE_MAX}건).</div>`;
+  }
+  return `
+    <div style="display:flex;flex-direction:column;gap:6px">
+      ${list.map((x) => {
+        const platLabel = x.platformLabel || (QR_PLATFORMS.find((p) => p.id === x.platform)?.label) || '플랫폼';
+        const tags = (x.tags || []).slice(0, 3);
+        return `
+        <div style="display:flex;align-items:flex-start;gap:10px;padding:11px 14px;border:1px solid var(--line);border-radius:8px;background:#fff">
+          <div style="display:flex;flex-direction:column;align-items:center;min-width:74px;padding-right:10px;border-right:1px solid var(--line)">
+            <span style="font-size:11px;font-weight:700;color:var(--ink-deep)">${escapeHtml(_qrFmtWhen(x.savedAt))}</span>
+            <span style="font-size:10px;color:var(--steel);margin-top:2px">${escapeHtml(_qrTimeAgo(x.savedAt))}</span>
+          </div>
+          <div style="flex:1;min-width:0">
+            <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:4px">
+              <span style="font-size:10px;font-weight:700;padding:2px 7px;background:#eef2ff;color:#4338ca;border-radius:4px">${escapeHtml(platLabel)}</span>
+              ${tags.map((t) => `<span style="font-size:10px;padding:2px 7px;background:#f3f4f6;color:#374151;border-radius:4px">${escapeHtml(t)}</span>`).join('')}
+              <span style="font-size:10px;color:var(--steel);margin-left:auto">${(x.charCount || 0).toLocaleString()}자</span>
+            </div>
+            <div style="font-size:13px;font-weight:600;color:var(--ink-deep);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escapeHtml(x.title || '')}">${escapeHtml(x.title || '제목 없음')}</div>
+            ${(x.matchedCases || []).length ? `<div style="font-size:11px;color:var(--steel);margin-top:3px">인용 사례: ${(x.matchedCases || []).map((c) => escapeHtml(c)).join(' · ')}</div>` : ''}
+          </div>
+          <div style="display:flex;gap:4px;align-self:center">
+            <button class="adm-btn secondary" data-qr-arc-open="${x.id}" style="padding:4px 10px;font-size:11px">열기</button>
+            <button class="adm-btn secondary" data-qr-arc-copy="${x.id}" style="padding:4px 10px;font-size:11px">복사</button>
+            <button class="adm-btn secondary" data-qr-arc-del="${x.id}" style="padding:4px 10px;font-size:11px;color:#dc2626">삭제</button>
+          </div>
+        </div>`;
+      }).join('')}
+    </div>
+  `;
+}
+
 /* ─── 회사 브리프 — localStorage 캐시 ─── */
 const QR_BRIEF_KEY = 'hamkkework.qrBrief.v1';
 const _qrBrief = {
@@ -4266,6 +4374,18 @@ export function renderQuoteResponder() {
         style="margin-top:12px;padding:18px 20px;border:1px solid var(--line);border-radius:10px;background:#fff;line-height:1.85;font-size:14px;color:#1a1a1a;white-space:pre-wrap;min-height:120px">
       </div>
     </div>
+
+    <div class="adm-card">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+        <h3 style="margin:0">3) 생성 이력 <span id="qr_arcCount" style="font-size:12px;font-weight:500;color:var(--steel)">${_qrArchive.all().length}건 보관</span></h3>
+        <div style="display:flex;gap:6px">
+          <button class="adm-btn secondary" id="qr_arcRefresh" style="padding:6px 12px;font-size:12px">새로고침</button>
+          <button class="adm-btn secondary" id="qr_arcClear" style="padding:6px 12px;font-size:12px;color:#dc2626">전체 삭제</button>
+        </div>
+      </div>
+      <div class="desc" style="margin-top:4px">생성된 답변은 자동으로 여기에 보관됩니다 (최근 ${QR_ARCHIVE_MAX}건, localStorage). 시간·플랫폼·태그·인용 사례를 한눈에 확인.</div>
+      <div id="qr_archiveList" style="margin-top:12px">${_qrRenderArchiveList()}</div>
+    </div>
   `;
 }
 
@@ -4358,6 +4478,92 @@ export function mountQuoteResponder() {
     lastResultText = '';
   });
 
+  /* ─── 생성 이력 (자동 보관) ─── */
+  const refreshArchive = () => {
+    const el = $('#qr_archiveList');
+    if (el) el.innerHTML = _qrRenderArchiveList();
+    const cnt = $('#qr_arcCount');
+    if (cnt) cnt.textContent = `${_qrArchive.all().length}건 보관`;
+    _bindArchiveRowHandlers();
+  };
+  function _bindArchiveRowHandlers() {
+    $$('[data-qr-arc-open]').forEach((b) => b.addEventListener('click', () => {
+      const item = _qrArchive.all().find((x) => x.id === b.dataset.qrArcOpen);
+      if (!item) return;
+      const platLabel = item.platformLabel || (QR_PLATFORMS.find((p) => p.id === item.platform)?.label) || '플랫폼';
+      const tags = (item.tags || []).map((t) => `<span style="font-size:10px;padding:2px 7px;background:#f3f4f6;color:#374151;border-radius:4px;margin-right:4px">${escapeHtml(t)}</span>`).join('');
+      const toneLabel = item.tone === 'formal' ? '정중한 비즈니스 존댓말' : '따뜻한 존댓말';
+      const lenLabel = item.length === 'short' ? '짧게' : item.length === 'long' ? '길게' : '보통';
+      openDrawer({
+        title: `🪶 ${item.title || '답변문'}`,
+        body: `
+          <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;font-size:11px;color:var(--steel);margin-bottom:12px;padding-bottom:10px;border-bottom:1px solid var(--line)">
+            <span style="font-weight:700;color:var(--ink-deep);font-size:12px">${escapeHtml(_qrFmtWhen(item.savedAt))}</span>
+            <span>·</span>
+            <span>${escapeHtml(_qrTimeAgo(item.savedAt))}</span>
+            <span>·</span>
+            <span style="font-size:10px;font-weight:700;padding:2px 7px;background:#eef2ff;color:#4338ca;border-radius:4px">${escapeHtml(platLabel)}</span>
+            ${tags}
+            <span style="margin-left:auto">톤 ${escapeHtml(toneLabel)} · 길이 ${escapeHtml(lenLabel)} · ${(item.charCount || 0).toLocaleString()}자</span>
+          </div>
+          ${(item.matchedCases || []).length ? `<div style="font-size:12px;color:var(--steel);margin-bottom:10px">🔎 인용 사례: <b>${(item.matchedCases || []).map((c) => escapeHtml(c)).join(' · ')}</b></div>` : ''}
+          <details style="margin-bottom:14px">
+            <summary style="cursor:pointer;font-size:12px;font-weight:600;color:var(--cobalt)">📥 고객 견적 요청 원문 (펼치기)</summary>
+            <pre style="white-space:pre-wrap;font-family:inherit;font-size:12px;line-height:1.7;padding:12px;background:#fafafa;border-radius:8px;margin:8px 0 0;max-height:30vh;overflow:auto">${escapeHtml(item.requestText || '')}</pre>
+          </details>
+          <div style="font-size:11px;font-weight:700;color:var(--steel);margin-bottom:6px;letter-spacing:.04em">📤 생성된 답변</div>
+          <div style="white-space:pre-wrap;font-size:14px;line-height:1.85;padding:16px 18px;background:#fff;border:1px solid var(--line);border-radius:10px;max-height:50vh;overflow:auto">${escapeHtml(item.answerText || '')}</div>
+          <div style="margin-top:12px;display:flex;gap:8px">
+            <button class="adm-btn" data-drawer-copy="${item.id}">답변 복사</button>
+            <button class="adm-btn secondary" data-drawer-reuse="${item.id}">입력에 다시 불러오기</button>
+          </div>
+        `,
+        onMount: () => {
+          document.querySelector(`[data-drawer-copy="${item.id}"]`)?.addEventListener('click', async () => {
+            try { await navigator.clipboard.writeText(item.answerText || ''); toast('답변이 복사되었습니다', 'success'); }
+            catch { toast('복사 실패 — 직접 선택해 주세요', 'error'); }
+          });
+          document.querySelector(`[data-drawer-reuse="${item.id}"]`)?.addEventListener('click', () => {
+            const ta = $('#qr_request');
+            if (ta) ta.value = item.requestText || '';
+            $$('.qr-plat').forEach((b) => b.classList.toggle('active', b.dataset.platform === item.platform));
+            selectedPlatform = item.platform || selectedPlatform;
+            const toneSel = $('#qr_tone'); if (toneSel && item.tone) toneSel.value = item.tone;
+            const lenSel = $('#qr_length'); if (lenSel && item.length) lenSel.value = item.length;
+            closeDrawer();
+            $('#qr_request')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            toast('입력 폼에 불러왔습니다');
+          });
+        },
+      });
+    }));
+    $$('[data-qr-arc-copy]').forEach((b) => b.addEventListener('click', async () => {
+      const item = _qrArchive.all().find((x) => x.id === b.dataset.qrArcCopy);
+      if (!item) return;
+      try { await navigator.clipboard.writeText(item.answerText || ''); toast('답변이 복사되었습니다', 'success'); }
+      catch { toast('복사 실패', 'error'); }
+    }));
+    $$('[data-qr-arc-del]').forEach((b) => b.addEventListener('click', () => {
+      const item = _qrArchive.all().find((x) => x.id === b.dataset.qrArcDel);
+      if (!item) return;
+      if (!window.confirm(`"${item.title || '이 답변'}"을 삭제하시겠습니까?`)) return;
+      _qrArchive.remove(item.id);
+      toast('삭제했습니다');
+      refreshArchive();
+    }));
+  }
+  _bindArchiveRowHandlers();
+
+  $('#qr_arcRefresh')?.addEventListener('click', refreshArchive);
+  $('#qr_arcClear')?.addEventListener('click', () => {
+    const n = _qrArchive.all().length;
+    if (!n) return;
+    if (!window.confirm(`보관된 ${n}건 전체를 삭제하시겠습니까? 되돌릴 수 없습니다.`)) return;
+    _qrArchive.clear();
+    toast(`${n}건 삭제했습니다`);
+    refreshArchive();
+  });
+
   const setStatus = (msg) => { const el = $('#qr_status'); if (el) el.textContent = msg || ''; };
 
   const renderResult = () => {
@@ -4440,7 +4646,26 @@ export function mountQuoteResponder() {
       });
       lastResultText = _qrHumanize(raw);
       renderResult();
-      setStatus(`완료 · ${lastResultText.length}자`);
+      // 🗂 자동 보관
+      if (lastResultText && lastResultText.length >= 50) {
+        const archived = {
+          id: 'qr_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+          savedAt: new Date().toISOString(),
+          platform: selectedPlatform,
+          platformLabel: QR_PLATFORMS.find((p) => p.id === selectedPlatform)?.label || '',
+          requestText,
+          answerText: lastResultText,
+          matchedCases: hintLabels,
+          tone,
+          length,
+          charCount: lastResultText.length,
+          title: _qrDeriveTitle(requestText),
+          tags: _qrDeriveTags(requestText + ' ' + lastResultText),
+        };
+        _qrArchive.add(archived);
+        refreshArchive();
+      }
+      setStatus(`완료 · ${lastResultText.length}자 · 보관함에 저장됨`);
     } catch (err) {
       if (err.name === 'AbortError') {
         setStatus('취소됨');
