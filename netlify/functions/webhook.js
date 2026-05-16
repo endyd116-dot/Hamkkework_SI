@@ -1,5 +1,5 @@
 /**
- * POST /api/webhook
+ * POST /api/webhook — Netlify Functions v2 (Web standard)
  *
  * Generic webhook receiver. Wire up:
  *  - PG payment notifications (NHN KCP, Toss Payments)
@@ -10,22 +10,29 @@
  * Always validate signatures in production!
  */
 
-export const handler = async (event) => {
-  if (event.httpMethod !== 'POST') {
-    return { statusCode: 405, body: JSON.stringify({ error: 'Method not allowed' }) };
+export default async (req) => {
+  if (req.method !== 'POST') {
+    return json(405, { error: 'Method not allowed' });
   }
 
   // Example: verify signature header
-  // const sig = event.headers['x-signature'];
-  // if (sig !== expectedSig) return { statusCode: 401, body: 'Unauthorized' };
+  // const sig = req.headers.get('x-signature');
+  // if (sig !== expectedSig) return json(401, { error: 'Unauthorized' });
 
   let payload = {};
-  try { payload = JSON.parse(event.body || '{}'); } catch {}
+  try { payload = await req.json(); } catch {}
 
   console.log('[webhook]', new Date().toISOString(), payload);
 
-  return {
-    statusCode: 200,
-    body: JSON.stringify({ ok: true, received: Object.keys(payload).length }),
-  };
+  return json(200, { ok: true, received: Object.keys(payload).length });
 };
+
+function json(status, body) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: {
+      'Content-Type': 'application/json; charset=utf-8',
+      'Cache-Control': 'no-store',
+    },
+  });
+}
