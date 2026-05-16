@@ -3583,17 +3583,171 @@ function _qrPickCases(requestText, limit = 3) {
   return [...all].sort((a, b) => (b.year || 0) - (a.year || 0)).slice(0, limit);
 }
 
-function _qrCaseLines(cases) {
-  return (cases || []).map((c, i) => {
-    const tags = (c.tags || []).slice(0, 4).join(', ');
-    const yr = c.year ? `${c.year}년` : '';
-    const amt = c.amount ? ` · ${c.amount}` : '';
-    const st = c.status ? ` · ${c.status}` : '';
-    return `  [사례 ${i + 1}] 이름="${c.label || c.id}" / 고객사="${c.client || ''}" / 한줄="${c.title || ''}" / 핵심="${(c.description || '').slice(0, 120)}" / 기술="${tags}" / 결과="${yr}${st}${amt}"`;
-  }).join('\n');
+/* ─── 회사 브리프 — localStorage 캐시 ─── */
+const QR_BRIEF_KEY = 'hamkkework.qrBrief.v1';
+const _qrBrief = {
+  get() {
+    try { return JSON.parse(localStorage.getItem(QR_BRIEF_KEY) || 'null'); }
+    catch { return null; }
+  },
+  set(v) { localStorage.setItem(QR_BRIEF_KEY, JSON.stringify(v)); },
+  clear() { localStorage.removeItem(QR_BRIEF_KEY); },
+};
+
+function _qrTimeAgo(iso) {
+  if (!iso) return '없음';
+  const ms = Date.now() - new Date(iso).getTime();
+  const m = Math.floor(ms / 60000);
+  if (m < 1) return '방금';
+  if (m < 60) return `${m}분 전`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}시간 전`;
+  const d = Math.floor(h / 24);
+  return `${d}일 전`;
 }
 
-function _qrBuildSystemExtra({ tone, length, settings, cases }) {
+async function _qrFetchHomepageText() {
+  try {
+    const r = await fetch('/', { cache: 'no-cache', credentials: 'same-origin' });
+    if (!r.ok) return '';
+    const html = await r.text();
+    const cleaned = html
+      .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+      .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+      .replace(/<svg[\s\S]*?<\/svg>/gi, ' ')
+      .replace(/<noscript[\s\S]*?<\/noscript>/gi, ' ')
+      .replace(/<!--[\s\S]*?-->/g, ' ')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/&nbsp;/g, ' ')
+      .replace(/&[a-z]+;/gi, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    return cleaned.slice(0, 5000);
+  } catch { return ''; }
+}
+
+async function _qrCallComposeOnce({ systemPromptExtra, userText, signal, onToken }) {
+  const resp = await fetch('/api/chat', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      mode: 'compose',
+      messages: [{ role: 'user', text: userText }],
+      systemPromptExtra,
+      variant: 'A',
+    }),
+    signal,
+  });
+  if (!resp.ok || !resp.body) {
+    const text = await resp.text().catch(() => '');
+    throw new Error(`HTTP ${resp.status} ${text.slice(0, 200)}`);
+  }
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = '';
+  let out = '';
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    const lines = buf.split('\n');
+    buf = lines.pop() || '';
+    for (const line of lines) {
+      const s = line.trim();
+      if (!s.startsWith('data:')) continue;
+      const payload = s.slice(5).trim();
+      if (!payload) continue;
+      let evt;
+      try { evt = JSON.parse(payload); } catch { continue; }
+      if (evt.type === 'token' && typeof evt.text === 'string') {
+        out += evt.text;
+        if (onToken) onToken(out);
+      } else if (evt.type === 'done') {
+        if (typeof evt.text === 'string' && !out) out = evt.text;
+      } else if (evt.type === 'error') {
+        throw new Error(evt.error || evt.detail || 'AI 응답 오류');
+      }
+    }
+  }
+  return out;
+}
+
+async function _qrBuildBriefViaAI({ extras, signal, onProgress }) {
+  const settings = store.settings.get() || {};
+  const cases = store.cases.all() || [];
+  const faqs = store.faqs.all() || [];
+  const homepage = await _qrFetchHomepageText();
+  if (onProgress) onProgress(`홈페이지 텍스트 ${homepage.length}자 수집됨. AI 압축 중…`);
+
+  const sysExtra = [
+    '당신은 회사 정보 큐레이터다. 아래 raw 자료(회사 설정·포트폴리오·FAQ·홈페이지 본문·PM 추가 메모)를 보고,',
+    '영업·답신 메시지 작성에 즉시 쓸 수 있는 **회사 브리프 마크다운**을 만들어라. 이 브리프는 이후 모든 답변 생성의 단일 컨텍스트로 사용된다.',
+    '',
+    '## 출력 형식 (헤더 그대로, 한국어)',
+    '### 회사 개요',
+    '(브랜드·포지셔닝·차별점 2~3줄)',
+    '### 주요 경력·연혁',
+    '(짧은 사실 항목 3~5개)',
+    '### 대표 레퍼런스',
+    '(모든 published 사례를 한 줄씩: "[프로젝트명] — 고객사 / 한줄 요약 / 기술스택 / 결과·연도". 14건이면 14줄.)',
+    '### 기술 스택',
+    '(자주 등장하는 기술 8~12개를 쉼표로)',
+    '### 강점·차별점',
+    '(불릿 3~5개)',
+    '### 추가 연계 가능 영역',
+    '(우리가 자주 제안하는 확장/연계 기능 5~7개 — AI 자동화·에이전트화·데이터 분석 등)',
+    '### 외부 링크',
+    '(홈페이지/회사소개/포트폴리오 URL 그대로 한 줄씩, 없으면 생략)',
+    '',
+    '## 규칙',
+    '- 마케팅 클리셰 금지. 사실 위주, 간결.',
+    '- 견적 금액·할인율 정보는 브리프에서 모두 생략.',
+    '- 모든 published 사례를 빠짐없이 한 줄씩 포함하라 (요약 X, 모두 등장).',
+    '- 전체 1500자 이내로 압축.',
+    '- 출력 외 머리말·설명·코드블록 금지. 위 헤더부터 바로 시작.',
+  ].join('\n');
+
+  const rawBlocks = [
+    '[RAW] 회사 설정',
+    `브랜드: ${settings.brand || ''} / 대표 PM: ${settings.pm || ''} / 이메일: ${settings.email || ''} / 연락처: ${settings.phone || ''}`,
+    `결제 일정: ${settings.invoice_terms || ''} / 하자보증: ${settings.warranty_months || ''}개월`,
+    `경력 한줄: ${settings.company_history || ''}`,
+    `홈페이지 URL: ${settings.homepage_url || ''} / 회사소개 URL: ${settings.about_url || ''} / 포트폴리오 URL: ${settings.portfolio_url || ''}`,
+    '',
+    `[RAW] 포트폴리오 (총 ${cases.length}건)`,
+    cases.map((c) => `- [${c.label || c.id}] ${c.client || ''} | ${c.title || ''} | ${(c.description || '').slice(0, 160)} | 기술: ${(c.tags || []).join(', ')} | 결과: ${c.status || ''} ${c.amount ? '('+c.amount+')' : ''} ${c.year ? c.year+'년' : ''}`).join('\n'),
+    '',
+    `[RAW] FAQ (상위 ${Math.min(faqs.length, 8)}건)`,
+    faqs.slice(0, 8).map((f) => `Q. ${f.question || f.q || ''}\nA. ${(f.answer || f.a || '').slice(0, 180)}`).join('\n\n'),
+    '',
+    homepage ? `[RAW] 홈페이지 본문 (텍스트 추출, 최대 5000자)\n${homepage}` : '',
+    extras ? `[RAW] PM 추가 메모 (강점·수상·인증·차별점 등)\n${extras}` : '',
+  ].filter(Boolean).join('\n\n');
+
+  const text = await _qrCallComposeOnce({
+    systemPromptExtra: sysExtra,
+    userText: rawBlocks + '\n\n위 자료로 브리프를 만들어 주세요.',
+    signal,
+    onToken: (partial) => { if (onProgress) onProgress(`AI 생성 중… ${partial.length}자`); },
+  });
+  const cleaned = text.replace(/```[\s\S]*?```/g, '').trim();
+  return {
+    text: cleaned,
+    generatedAt: new Date().toISOString(),
+    caseCount: cases.length,
+    faqCount: faqs.length,
+    homepageBytes: homepage.length,
+    notesLen: (extras || '').length,
+    extras: extras || '',
+  };
+}
+
+function _qrCaseLabelsForHint(requestText, limit = 3) {
+  const picks = _qrPickCases(requestText, limit);
+  return picks.map((c) => c.label || c.id);
+}
+
+function _qrBuildSystemExtra({ tone, length, brief }) {
   const lengthHint = length === 'short'
     ? '본문 분량은 400~500자 정도로 간결하게. 끝맺음을 반드시 완결할 것.'
     : length === 'long'
@@ -3602,62 +3756,51 @@ function _qrBuildSystemExtra({ tone, length, settings, cases }) {
   const toneHint = tone === 'formal'
     ? '톤은 정중한 비즈니스 존댓말. 격식 있되 딱딱하지 않게.'
     : '톤은 따뜻한 존댓말. 사람이 직접 쓴 듯 자연스럽고 친근하지만, 가벼운 표현은 자제.';
-  const links = [
-    settings.homepage_url ? `홈페이지: ${settings.homepage_url}` : '',
-    settings.about_url ? `회사소개·연혁: ${settings.about_url}` : '',
-    settings.portfolio_url ? `포트폴리오: ${settings.portfolio_url}` : '',
-  ].filter(Boolean).join(' / ');
-  const history = settings.company_history || '대기업 SI 검증 경험과 풀스택 자체 개발팀을 함께 갖춘 함께워크_SI';
-  const pm = settings.pm || '박두용';
-  const brand = settings.brand || '함께워크_SI';
-  const refCount = cases?.length || 0;
 
   return [
     '[현재 모드: 고객요청 답변생성]',
-    '당신은 SI/AI 컨설팅사 ' + brand + '의 PM(' + pm + ')이 외주 플랫폼에서 받은 견적 요청에 직접 답신하는 메시지를 작성한다.',
+    '당신은 SI/AI 컨설팅사의 PM이 외주 플랫폼에서 받은 견적 요청에 직접 답신하는 메시지를 작성한다.',
+    '아래 [COMPANY_BRIEF] 블록이 회사·레퍼런스에 대한 단일 사실원본(single source of truth)이다. 브리프에 적힌 사실만 사용하고, 없는 내용은 지어내지 말 것.',
     '',
     '## 가장 중요한 필수 조건 (위반 시 응답 무효)',
-    '- 사용자 메시지의 [REFERENCE_CASES] 블록에 명시된 ' + refCount + '개 사례 중 **최소 ' + Math.min(2, refCount) + '개 이상**의 "이름"과 "고객사"를 본문에 정확히 그대로 등장시켜야 한다. 예: "신세계그룹 LCMS", "아워홈 TQMS" 처럼 회사명·프로젝트명을 자연스러운 문장 안에 명시.',
-    '- 단순히 "비슷한 경험이 있습니다" 같은 추상 표현 금지. 반드시 실제 고객사명·프로젝트명·기술·결과를 본문 안에서 구체적으로 인용한다.',
-    '- 사례 인용 위치는 "왜 우리가 이 작업을 가장 잘할 수 있는가" 단락. 흐름에 자연스럽게 녹이되, 사례명·고객사는 또렷이 등장시킨다.',
+    '- [COMPANY_BRIEF]의 "### 대표 레퍼런스" 섹션에 적힌 사례 중 **최소 2건**의 "프로젝트명"과 "고객사"를 본문에 정확히 그대로 등장시켜야 한다. (예: "신세계그룹 LCMS", "아워홈 TQMS")',
+    '- 사용자 메시지의 [상관도 높은 사례] 힌트가 있으면 그 사례들을 우선적으로 인용하라.',
+    '- "비슷한 경험이 있습니다" 같은 추상 표현 금지. 실제 고객사명·프로젝트명·기술·결과를 본문 안에 구체적으로 인용.',
     '',
     '## 절대 규칙 (톤·형식)',
-    '- 사람이 직접 작성한 듯한 자연스러운 한국어 존댓말로만 작성한다. 챗봇·AI 클리셰는 전면 금지.',
-    '- 다음 표현·패턴은 절대 사용 금지: "AI가", "저는 AI", "AI 어시스턴트", "모델로서", "물론입니다!", "도와드리겠습니다!", "기꺼이", "최선을 다해", 과한 이모지, ✅·🚀·💡 등 장식 기호, "1. … 2. … 3. …" 식 번호 매김 남발, "##" 헤더 남발.',
-    '- 구조 표시(###, **굵게**, 불릿)는 꼭 필요할 때만 한두 군데에만. 기본은 자연스러운 단락 흐름. 사례 인용도 불릿 나열이 아니라 자연 문장으로.',
-    '- 견적 금액·일당·할인율을 절대 추정해서 적지 말 것. 금액 질문은 모두 "정확한 견적은 짧게 통화 또는 미팅 한 번으로 함께 확정하면 좋겠습니다" 류로 정중히 미룬다.',
-    '- 일정·기간은 "대략 N주차" 수준의 추정 범위로만 표현. "정확한 일정은 상담 후 확정"이라는 단서를 자연스럽게 포함.',
-    '- 응답 메시지 본문만 출력한다. 머리말("아래는 답변입니다" 같은) 금지. 코드블록 금지. action 블록 금지.',
-    '- 어떤 도구(function call)도 호출하지 말 것. 리드 등록·견적 초안 작성 등 시스템 동작은 이 작업과 무관하다. 오직 답신 메시지 텍스트만 출력.',
+    '- 사람이 직접 작성한 듯한 자연스러운 한국어 존댓말로만 작성. 챗봇·AI 클리셰 전면 금지.',
+    '- 다음 표현 절대 금지: "AI가", "저는 AI", "AI 어시스턴트", "모델로서", "물론입니다!", "도와드리겠습니다!", "기꺼이", "최선을 다해", 과한 이모지, ✅·🚀·💡 등 장식 기호, "1. … 2. … 3. …" 식 번호 매김 남발, "##" 헤더 남발.',
+    '- 구조 표시는 꼭 필요할 때 한두 군데에만. 사례 인용도 불릿 나열이 아니라 자연 문장으로.',
+    '- 견적 금액·일당·할인율을 절대 추정해서 적지 말 것. 금액은 모두 "정확한 견적은 짧게 통화 또는 미팅 한 번으로 함께 확정하면 좋겠습니다" 류로 정중히 미룸.',
+    '- 일정은 "대략 N주차" 추정 범위로만. "정확한 일정은 상담 후 확정" 단서 자연스럽게 포함.',
+    '- 응답 메시지 본문만 출력. 머리말 금지. 코드블록 금지. action 블록 금지. function call 금지.',
     '',
-    '## 본문 흐름 (자연스럽게 단락으로 녹여라, 헤더 X)',
-    '1) 첫 단락: 인사 + 요청 잘 읽었다는 톤 + 핵심 이해를 한 줄로 재정리.',
-    '2) 어떻게 만들지: 설계 접근(아키텍처·기술 방향)을 짧고 또렷하게.',
-    '3) 기간: 단계 분해(예: 요건/설계 1~2주 → 구축 N주 → 검수 1주 등) — 정확한 일정은 상담 후 확정 단서 포함.',
-    '4) **레퍼런스 인용 단락 (필수)**: 사용자 메시지의 [REFERENCE_CASES] 중 최소 ' + Math.min(2, refCount) + '건의 고객사·프로젝트명을 명시하며 "비슷한 안건을 어떻게 풀어냈는지" 한두 문장씩 자연스럽게 서술. 사례명·고객사 빠지면 무효.',
-    '5) 추가 연계 기능 제안 1~2개 (요청 도메인에서 자연스럽게 확장될 만한 것).',
-    '6) AX(AI Transformation)·AI 워크플로우(에이전트) 확장 여지를 한 단락으로 — "이 작업을 단발 구축으로 끝내지 않고 ○○ 자동화/에이전트화하면 어떤 효과가 가능한지" 정도.',
-    '7) 우리 경력·연혁 한 줄(' + history + ')과, 마지막으로 더 자세한 자료는 아래 링크에서 보실 수 있다는 식으로 자연스럽게 안내(' + (links || '링크 미설정 — 회사소개·포트폴리오 안내 문구만 짧게') + ').',
-    '8) 마지막 단락: 견적·일정 확정은 짧은 통화 또는 미팅 한 번으로 함께 정하시는 게 좋겠다는 정중한 마무리.',
+    '## 본문 흐름 (자연스러운 단락, 헤더 X)',
+    '1) 인사 + 요청 잘 읽었다는 톤 + 핵심 이해 한 줄 재정리.',
+    '2) 설계 접근(아키텍처·기술 방향)을 짧고 또렷하게.',
+    '3) 단계·기간(요건/설계 → 구축 → 검수). 정확한 일정은 상담 후 확정 단서.',
+    '4) **레퍼런스 인용 (필수)** — [COMPANY_BRIEF] 대표 레퍼런스 중 최소 2건의 고객사·프로젝트명을 명시하며 "비슷한 안건을 어떻게 풀어냈는지" 한두 문장씩.',
+    '5) 추가 연계 기능 제안 1~2개 ([COMPANY_BRIEF]의 "추가 연계 가능 영역" 참조).',
+    '6) AX·AI 워크플로우(에이전트) 확장 여지를 한 단락으로.',
+    '7) [COMPANY_BRIEF]의 회사 개요·경력·외부 링크를 자연스럽게 마무리 안내.',
+    '8) 견적·일정 확정은 짧은 통화/미팅으로 함께 정하시는 게 좋겠다는 정중한 마무리.',
     '',
     toneHint,
     lengthHint,
+    '',
+    '## [COMPANY_BRIEF] — 우리 회사 단일 사실원본',
+    brief || '(브리프 없음 — 일반적 표현으로만 답변)',
   ].join('\n');
 }
 
-function _qrBuildUserMessage({ platform, requestText, cases }) {
+function _qrBuildUserMessage({ platform, requestText, hintLabels }) {
   const plat = QR_PLATFORMS.find((p) => p.id === platform)?.label || '외주 플랫폼';
-  const caseBlock = (cases && cases.length)
-    ? [
-        '[REFERENCE_CASES] — 본문에 반드시 인용해야 하는 우리 회사 실제 포트폴리오 (이름·고객사 정확히 명시 필수):',
-        _qrCaseLines(cases),
-        '',
-      ].join('\n')
-    : '[REFERENCE_CASES] (등록된 사례 없음 — 일반적 경험으로만 표현)\n\n';
+  const hint = (hintLabels && hintLabels.length)
+    ? '[상관도 높은 사례] (이 사례들을 우선 인용하라): ' + hintLabels.join(', ') + '\n'
+    : '';
   return [
-    caseBlock,
-    '아래는 ' + plat + '을 통해 들어온 고객의 견적 요청 원문입니다. 시스템 지시(가장 중요한 필수 조건 포함)에 따라 답신 메시지 본문 한 편을 작성해 주세요.',
-    '특히 위 [REFERENCE_CASES] 중 최소 2건의 고객사명·프로젝트명을 본문에 또렷이 등장시켜 "우리가 이 일을 가장 잘할 수 있는 이유"로 연결해 주세요.',
+    hint,
+    '아래는 ' + plat + '을 통해 들어온 고객의 견적 요청 원문입니다. 시스템 지시에 따라 답신 메시지 본문 한 편을 작성해 주세요.',
     '',
     '— 요청 원문 시작 —',
     (requestText || '').trim(),
@@ -3668,6 +3811,12 @@ function _qrBuildUserMessage({ platform, requestText, cases }) {
 export function renderQuoteResponder() {
   const s = store.settings.get() || {};
   const linksMissing = !s.homepage_url && !s.about_url && !s.portfolio_url;
+  const brief = _qrBrief.get();
+  const briefAge = brief ? _qrTimeAgo(brief.generatedAt) : '없음';
+  const briefMeta = brief
+    ? `사례 ${brief.caseCount || 0}건 · FAQ ${brief.faqCount || 0}건 · 홈페이지 ${brief.homepageBytes || 0}자 · 추가메모 ${brief.notesLen || 0}자`
+    : '';
+
   return `
     <div class="adm-card" style="border-left:4px solid var(--cobalt)">
       <h3 style="display:flex;align-items:center;gap:8px">
@@ -3676,14 +3825,48 @@ export function renderQuoteResponder() {
       </h3>
       <div class="desc">
         외주 플랫폼·이메일로 들어온 견적 요청에 보낼 답신 메시지를 자연스러운 사람 톤으로 자동 작성합니다.
-        포트폴리오에서 유사 사례 2~3건을 자동으로 찾아 본문에 녹이고, 마지막에 회사 정보 링크와 함께 마무리합니다.
+        매 호출마다 사례·홈페이지를 재읽지 않고, 미리 만들어둔 <b>회사 브리프</b>(아래 0번)만 참조해 토큰을 절감합니다.
         <b>견적 금액은 절대 본문에 들어가지 않습니다</b> — 추후 상담에서 함께 확정하도록 자연스럽게 유도합니다.
       </div>
       ${linksMissing ? `
         <div style="margin-top:8px;padding:10px 12px;border:1px dashed #e5b800;background:#fffbeb;border-radius:8px;font-size:12px;color:#7a5d00">
-          ⚠️ [설정 → 외부 링크]에 홈페이지·회사소개·포트폴리오 URL을 등록하면 답변 말미에 자연스럽게 노출됩니다.
+          ⚠️ [설정 → 외부 링크]에 홈페이지·회사소개·포트폴리오 URL을 등록하면 브리프·답변문에 자연스럽게 노출됩니다.
           <a href="#settings" data-qr-go-settings style="color:var(--cobalt);font-weight:600">설정으로 이동</a>
         </div>` : ''}
+    </div>
+
+    <div class="adm-card" id="qr_briefCard" style="${brief ? '' : 'border:1px dashed #f59e0b;background:#fffbeb'}">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap">
+        <div>
+          <h3 style="margin:0">0) 회사 브리프 ${brief ? '<span style="font-size:11px;font-weight:500;color:#15803d;padding:3px 8px;background:#dcfce7;border-radius:999px;margin-left:6px">활성</span>' : '<span style="font-size:11px;font-weight:500;color:#92400e;padding:3px 8px;background:#fef3c7;border-radius:999px;margin-left:6px">미생성</span>'}</h3>
+          <div class="desc" style="margin-top:6px">
+            AI가 우리 회사 설정·포트폴리오·FAQ·홈페이지 본문·PM 메모를 한 번 조사해 <b>~1500자 마크다운 브리프</b>로 압축합니다.
+            이후 모든 답변 생성은 이 브리프만 참조 — 매 호출마다 raw 데이터를 재포장하지 않으므로 토큰을 크게 절감합니다.
+            <br>마지막 갱신: <b>${briefAge}</b>${briefMeta ? ` · ${escapeHtml(briefMeta)}` : ''}
+          </div>
+        </div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
+          <button class="adm-btn" id="qr_briefBuild">${brief ? '재생성' : 'AI로 자동 생성'}</button>
+          ${brief ? '<button class="adm-btn secondary" id="qr_briefEdit">수동 편집</button>' : ''}
+          ${brief ? '<button class="adm-btn secondary" id="qr_briefClear" style="color:#dc2626">삭제</button>' : ''}
+        </div>
+      </div>
+      <div class="adm-field" style="margin-top:14px">
+        <label style="font-size:12px;color:var(--steel)">PM 추가 메모 (선택) — 강점·수상·인증·차별점·자주 쓰는 표현 등. 브리프 생성 시 같이 반영됩니다.</label>
+        <textarea id="qr_briefExtras" rows="4" placeholder="예) 정부과제 우수아이템 선정 / 자체 풀스택팀 6명 / 24시간 이내 1차 회신 정책 / 검수 1주 무상…"
+          style="width:100%;margin-top:6px;padding:10px;border:1px solid var(--line);border-radius:8px;font-family:inherit;font-size:13px;line-height:1.6;resize:vertical">${escapeHtml(brief?.extras || '')}</textarea>
+      </div>
+      <div id="qr_briefStatus" style="margin-top:8px;font-size:12px;color:var(--steel);min-height:18px"></div>
+      <div id="qr_briefPreviewWrap" style="margin-top:10px;${brief ? '' : 'display:none'}">
+        <details>
+          <summary style="cursor:pointer;font-size:12px;color:var(--cobalt);font-weight:600">📄 브리프 미리보기 / 편집</summary>
+          <textarea id="qr_briefText" rows="14"
+            style="width:100%;margin-top:8px;padding:12px;border:1px solid var(--line);border-radius:8px;font-family:'JetBrains Mono',Consolas,monospace;font-size:12px;line-height:1.7;resize:vertical;background:#fafafa">${escapeHtml(brief?.text || '')}</textarea>
+          <div style="margin-top:6px;display:flex;gap:6px">
+            <button class="adm-btn secondary" id="qr_briefSaveEdit" style="padding:4px 12px;font-size:12px">편집 저장</button>
+          </div>
+        </details>
+      </div>
     </div>
 
     <div class="adm-card">
@@ -3751,6 +3934,7 @@ export function mountQuoteResponder() {
   let lastResultText = '';
   let lastMatchedCases = [];
   let currentRunAbort = null;
+  let briefBuildAbort = null;
 
   $$('.qr-plat').forEach((btn) => {
     btn.addEventListener('click', () => {
@@ -3763,6 +3947,67 @@ export function mountQuoteResponder() {
   document.querySelector('[data-qr-go-settings]')?.addEventListener('click', (e) => {
     e.preventDefault();
     location.hash = '#settings';
+    if (typeof window.rerenderView === 'function') window.rerenderView();
+  });
+
+  /* ─── 회사 브리프 핸들러 ─── */
+  const setBriefStatus = (msg) => { const el = $('#qr_briefStatus'); if (el) el.textContent = msg || ''; };
+
+  $('#qr_briefBuild')?.addEventListener('click', async () => {
+    const extras = $('#qr_briefExtras')?.value.trim() || '';
+    if (briefBuildAbort) { try { briefBuildAbort.abort(); } catch {} }
+    const abort = new AbortController();
+    briefBuildAbort = abort;
+    const btn = $('#qr_briefBuild');
+    btn.disabled = true;
+    setBriefStatus('자료 수집 중…');
+    try {
+      const built = await _qrBuildBriefViaAI({
+        extras,
+        signal: abort.signal,
+        onProgress: (msg) => setBriefStatus(msg),
+      });
+      if (!built.text || built.text.length < 100) {
+        throw new Error('브리프가 비정상적으로 짧습니다. 다시 시도해 주세요.');
+      }
+      _qrBrief.set(built);
+      setBriefStatus(`완료 · ${built.text.length}자`);
+      toast('회사 브리프가 생성되었습니다', 'success');
+      if (typeof window.rerenderView === 'function') window.rerenderView();
+    } catch (err) {
+      if (err.name === 'AbortError') setBriefStatus('취소됨');
+      else {
+        toast('브리프 생성 실패: ' + (err?.message || err), 'error');
+        setBriefStatus('실패');
+      }
+    } finally {
+      btn.disabled = false;
+      briefBuildAbort = null;
+    }
+  });
+
+  $('#qr_briefSaveEdit')?.addEventListener('click', () => {
+    const text = $('#qr_briefText')?.value.trim();
+    if (!text || text.length < 100) {
+      toast('브리프 본문이 너무 짧습니다 (100자 이상 필요)', 'error');
+      return;
+    }
+    const cur = _qrBrief.get() || {};
+    _qrBrief.set({ ...cur, text, generatedAt: new Date().toISOString() });
+    toast('편집한 브리프가 저장되었습니다', 'success');
+    if (typeof window.rerenderView === 'function') window.rerenderView();
+  });
+
+  $('#qr_briefEdit')?.addEventListener('click', () => {
+    const details = document.querySelector('#qr_briefPreviewWrap details');
+    if (details) details.open = true;
+    $('#qr_briefText')?.focus();
+  });
+
+  $('#qr_briefClear')?.addEventListener('click', () => {
+    if (!window.confirm('회사 브리프를 삭제하시겠습니까? 다음 답변 생성 시 다시 만들어야 합니다.')) return;
+    _qrBrief.clear();
+    toast('브리프를 삭제했습니다');
     if (typeof window.rerenderView === 'function') window.rerenderView();
   });
 
@@ -3815,77 +4060,44 @@ export function mountQuoteResponder() {
       toast('고객 견적 요청 원문을 좀 더 입력해 주세요 (15자 이상)', 'error');
       return;
     }
+    const brief = _qrBrief.get();
+    if (!brief || !brief.text) {
+      toast('먼저 [0) 회사 브리프]에서 브리프를 생성해 주세요', 'error');
+      $('#qr_briefBuild')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      return;
+    }
     const tone = $('#qr_tone').value;
     const length = $('#qr_length').value;
-    const settings = store.settings.get() || {};
 
     if (currentRunAbort) { try { currentRunAbort.abort(); } catch {} }
     const abort = new AbortController();
     currentRunAbort = abort;
 
     lastMatchedCases = _qrPickCases(requestText, 3);
+    const hintLabels = lastMatchedCases.map((c) => c.label || c.id);
     lastResultText = '';
 
     const card = $('#qr_resultCard');
     card.style.display = 'block';
     const matchesEl = $('#qr_matches');
-    matchesEl.innerHTML = lastMatchedCases.length
-      ? '🔎 본문에 자동 인용할 사례: ' + lastMatchedCases.map((c) => `<b>${escapeHtml(c.label || c.id)}</b>`).join(' · ')
-      : '🔎 매칭된 사례가 없어 일반적 경험으로 표현합니다.';
+    matchesEl.innerHTML = hintLabels.length
+      ? '🔎 상관도 높은 사례 (AI에게 우선 인용 힌트로 전달): ' + hintLabels.map((l) => `<b>${escapeHtml(l)}</b>`).join(' · ')
+      : '🔎 매칭 힌트 없음 — 브리프 전체에서 AI가 자율 선택합니다.';
     renderResult();
 
-    setStatus('생성 중…');
+    setStatus('생성 중… (브리프 기반)');
     $('#qr_generate').disabled = true;
 
-    const systemPromptExtra = _qrBuildSystemExtra({ tone, length, settings, cases: lastMatchedCases });
-    const userMsg = _qrBuildUserMessage({ platform: selectedPlatform, requestText, cases: lastMatchedCases });
+    const systemPromptExtra = _qrBuildSystemExtra({ tone, length, brief: brief.text });
+    const userMsg = _qrBuildUserMessage({ platform: selectedPlatform, requestText, hintLabels });
 
     try {
-      const resp = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          mode: 'compose', // 서버: tools 미부착 + admin preamble 우회 + 캐시 미사용 (타임아웃 방지)
-          messages: [{ role: 'user', text: userMsg }],
-          systemPromptExtra,
-          variant: 'A',
-        }),
+      lastResultText = await _qrCallComposeOnce({
+        systemPromptExtra,
+        userText: userMsg,
         signal: abort.signal,
+        onToken: (partial) => { lastResultText = partial; renderResult(); },
       });
-      if (!resp.ok || !resp.body) {
-        const text = await resp.text().catch(() => '');
-        throw new Error(`HTTP ${resp.status} ${text.slice(0, 200)}`);
-      }
-      const reader = resp.body.getReader();
-      const decoder = new TextDecoder();
-      let buf = '';
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buf += decoder.decode(value, { stream: true });
-        const lines = buf.split('\n');
-        buf = lines.pop() || '';
-        for (const line of lines) {
-          const s = line.trim();
-          if (!s.startsWith('data:')) continue;
-          const payload = s.slice(5).trim();
-          if (!payload) continue;
-          let evt;
-          try { evt = JSON.parse(payload); }
-          catch { continue; } // keepalive 등 비-JSON 라인 무시
-          if (evt.type === 'token' && typeof evt.text === 'string') {
-            lastResultText += evt.text;
-            renderResult();
-          } else if (evt.type === 'done') {
-            if (typeof evt.text === 'string' && !lastResultText) {
-              lastResultText = evt.text;
-              renderResult();
-            }
-          } else if (evt.type === 'error') {
-            throw new Error(evt.error || evt.detail || 'AI 응답 오류');
-          }
-        }
-      }
       // 마지막 정리 — action 블록·머리말 제거
       lastResultText = lastResultText
         .replace(/```action[\s\S]*?```/g, '')
