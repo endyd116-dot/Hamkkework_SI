@@ -3583,6 +3583,16 @@ function _qrPickCases(requestText, limit = 3) {
   return [...all].sort((a, b) => (b.year || 0) - (a.year || 0)).slice(0, limit);
 }
 
+function _qrCaseLines(cases) {
+  return (cases || []).map((c, i) => {
+    const tags = (c.tags || []).slice(0, 4).join(', ');
+    const yr = c.year ? `${c.year}년` : '';
+    const amt = c.amount ? ` · ${c.amount}` : '';
+    const st = c.status ? ` · ${c.status}` : '';
+    return `  [사례 ${i + 1}] 이름="${c.label || c.id}" / 고객사="${c.client || ''}" / 한줄="${c.title || ''}" / 핵심="${(c.description || '').slice(0, 120)}" / 기술="${tags}" / 결과="${yr}${st}${amt}"`;
+  }).join('\n');
+}
+
 function _qrBuildSystemExtra({ tone, length, settings, cases }) {
   const lengthHint = length === 'short'
     ? '본문 분량은 400~500자 정도로 간결하게. 끝맺음을 반드시 완결할 것.'
@@ -3592,10 +3602,6 @@ function _qrBuildSystemExtra({ tone, length, settings, cases }) {
   const toneHint = tone === 'formal'
     ? '톤은 정중한 비즈니스 존댓말. 격식 있되 딱딱하지 않게.'
     : '톤은 따뜻한 존댓말. 사람이 직접 쓴 듯 자연스럽고 친근하지만, 가벼운 표현은 자제.';
-  const caseLines = (cases || []).map((c, i) => {
-    const tags = (c.tags || []).slice(0, 4).join(', ');
-    return `  ${i + 1}) [${c.label || c.id}] ${c.client || ''} — ${c.title || ''} | 기술: ${tags} | 결과: ${c.status || ''} ${c.amount ? '('+c.amount+')' : ''} (${c.year || ''})`;
-  }).join('\n');
   const links = [
     settings.homepage_url ? `홈페이지: ${settings.homepage_url}` : '',
     settings.about_url ? `회사소개·연혁: ${settings.about_url}` : '',
@@ -3604,15 +3610,21 @@ function _qrBuildSystemExtra({ tone, length, settings, cases }) {
   const history = settings.company_history || '대기업 SI 검증 경험과 풀스택 자체 개발팀을 함께 갖춘 함께워크_SI';
   const pm = settings.pm || '박두용';
   const brand = settings.brand || '함께워크_SI';
+  const refCount = cases?.length || 0;
 
   return [
     '[현재 모드: 고객요청 답변생성]',
     '당신은 SI/AI 컨설팅사 ' + brand + '의 PM(' + pm + ')이 외주 플랫폼에서 받은 견적 요청에 직접 답신하는 메시지를 작성한다.',
     '',
-    '## 절대 규칙',
+    '## 가장 중요한 필수 조건 (위반 시 응답 무효)',
+    '- 사용자 메시지의 [REFERENCE_CASES] 블록에 명시된 ' + refCount + '개 사례 중 **최소 ' + Math.min(2, refCount) + '개 이상**의 "이름"과 "고객사"를 본문에 정확히 그대로 등장시켜야 한다. 예: "신세계그룹 LCMS", "아워홈 TQMS" 처럼 회사명·프로젝트명을 자연스러운 문장 안에 명시.',
+    '- 단순히 "비슷한 경험이 있습니다" 같은 추상 표현 금지. 반드시 실제 고객사명·프로젝트명·기술·결과를 본문 안에서 구체적으로 인용한다.',
+    '- 사례 인용 위치는 "왜 우리가 이 작업을 가장 잘할 수 있는가" 단락. 흐름에 자연스럽게 녹이되, 사례명·고객사는 또렷이 등장시킨다.',
+    '',
+    '## 절대 규칙 (톤·형식)',
     '- 사람이 직접 작성한 듯한 자연스러운 한국어 존댓말로만 작성한다. 챗봇·AI 클리셰는 전면 금지.',
     '- 다음 표현·패턴은 절대 사용 금지: "AI가", "저는 AI", "AI 어시스턴트", "모델로서", "물론입니다!", "도와드리겠습니다!", "기꺼이", "최선을 다해", 과한 이모지, ✅·🚀·💡 등 장식 기호, "1. … 2. … 3. …" 식 번호 매김 남발, "##" 헤더 남발.',
-    '- 구조 표시(###, **굵게**, 불릿)는 꼭 필요할 때만 한두 군데에만. 기본은 자연스러운 단락 흐름.',
+    '- 구조 표시(###, **굵게**, 불릿)는 꼭 필요할 때만 한두 군데에만. 기본은 자연스러운 단락 흐름. 사례 인용도 불릿 나열이 아니라 자연 문장으로.',
     '- 견적 금액·일당·할인율을 절대 추정해서 적지 말 것. 금액 질문은 모두 "정확한 견적은 짧게 통화 또는 미팅 한 번으로 함께 확정하면 좋겠습니다" 류로 정중히 미룬다.',
     '- 일정·기간은 "대략 N주차" 수준의 추정 범위로만 표현. "정확한 일정은 상담 후 확정"이라는 단서를 자연스럽게 포함.',
     '- 응답 메시지 본문만 출력한다. 머리말("아래는 답변입니다" 같은) 금지. 코드블록 금지. action 블록 금지.',
@@ -3622,7 +3634,7 @@ function _qrBuildSystemExtra({ tone, length, settings, cases }) {
     '1) 첫 단락: 인사 + 요청 잘 읽었다는 톤 + 핵심 이해를 한 줄로 재정리.',
     '2) 어떻게 만들지: 설계 접근(아키텍처·기술 방향)을 짧고 또렷하게.',
     '3) 기간: 단계 분해(예: 요건/설계 1~2주 → 구축 N주 → 검수 1주 등) — 정확한 일정은 상담 후 확정 단서 포함.',
-    '4) "비슷한 경험"으로 아래 사례 ' + (cases?.length || 0) + '건을 자연스럽게 녹여 "우리가 이걸 가장 잘할 수 있는 이유"로 연결. 사례 이름·고객사·기술을 본문 흐름 안에 한 줄씩 자연스럽게 인용 (불릿으로 나열하지 말 것).',
+    '4) **레퍼런스 인용 단락 (필수)**: 사용자 메시지의 [REFERENCE_CASES] 중 최소 ' + Math.min(2, refCount) + '건의 고객사·프로젝트명을 명시하며 "비슷한 안건을 어떻게 풀어냈는지" 한두 문장씩 자연스럽게 서술. 사례명·고객사 빠지면 무효.',
     '5) 추가 연계 기능 제안 1~2개 (요청 도메인에서 자연스럽게 확장될 만한 것).',
     '6) AX(AI Transformation)·AI 워크플로우(에이전트) 확장 여지를 한 단락으로 — "이 작업을 단발 구축으로 끝내지 않고 ○○ 자동화/에이전트화하면 어떤 효과가 가능한지" 정도.',
     '7) 우리 경력·연혁 한 줄(' + history + ')과, 마지막으로 더 자세한 자료는 아래 링크에서 보실 수 있다는 식으로 자연스럽게 안내(' + (links || '링크 미설정 — 회사소개·포트폴리오 안내 문구만 짧게') + ').',
@@ -3630,16 +3642,22 @@ function _qrBuildSystemExtra({ tone, length, settings, cases }) {
     '',
     toneHint,
     lengthHint,
-    '',
-    '## 사례 자료 (본문에 자연스럽게 인용, 그대로 복붙 X)',
-    caseLines || '  (등록된 사례 없음 — 일반적 경험으로만 표현)',
   ].join('\n');
 }
 
-function _qrBuildUserMessage({ platform, requestText }) {
+function _qrBuildUserMessage({ platform, requestText, cases }) {
   const plat = QR_PLATFORMS.find((p) => p.id === platform)?.label || '외주 플랫폼';
+  const caseBlock = (cases && cases.length)
+    ? [
+        '[REFERENCE_CASES] — 본문에 반드시 인용해야 하는 우리 회사 실제 포트폴리오 (이름·고객사 정확히 명시 필수):',
+        _qrCaseLines(cases),
+        '',
+      ].join('\n')
+    : '[REFERENCE_CASES] (등록된 사례 없음 — 일반적 경험으로만 표현)\n\n';
   return [
-    '아래는 ' + plat + '을 통해 들어온 고객의 견적 요청 원문입니다. 위 규칙에 따라, 이 고객에게 보낼 답신 메시지 본문 한 편을 작성해 주세요.',
+    caseBlock,
+    '아래는 ' + plat + '을 통해 들어온 고객의 견적 요청 원문입니다. 시스템 지시(가장 중요한 필수 조건 포함)에 따라 답신 메시지 본문 한 편을 작성해 주세요.',
+    '특히 위 [REFERENCE_CASES] 중 최소 2건의 고객사명·프로젝트명을 본문에 또렷이 등장시켜 "우리가 이 일을 가장 잘할 수 있는 이유"로 연결해 주세요.',
     '',
     '— 요청 원문 시작 —',
     (requestText || '').trim(),
@@ -3820,7 +3838,7 @@ export function mountQuoteResponder() {
     $('#qr_generate').disabled = true;
 
     const systemPromptExtra = _qrBuildSystemExtra({ tone, length, settings, cases: lastMatchedCases });
-    const userMsg = _qrBuildUserMessage({ platform: selectedPlatform, requestText });
+    const userMsg = _qrBuildUserMessage({ platform: selectedPlatform, requestText, cases: lastMatchedCases });
 
     try {
       const resp = await fetch('/api/chat', {
