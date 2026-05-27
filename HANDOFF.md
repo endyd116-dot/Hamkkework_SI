@@ -180,6 +180,8 @@ netlify deploy --prod --dir .
 허브(SIREN/tbfa.co.kr)가 IdP로 단일로그인 토큰을 발급하고, SI는 SP로 검증해 자체 세션을 발급한다.
 허브 관리자가 허브의 "④ 함께워크_SI" 카드를 클릭하면 SI 관리자로 바로 진입한다. **SI 별도 로그인 없음.**
 
+> **상태(2026-05-28): 라이브·연동 종결.** 허브 IdP(`/api/sso-si`)+카드 ④ 라이브, `siax.tbfa.co.kr` SSL 발급, MIS cutover(`a79785f`) 완료. 허브 토큰 형식↔SI 검증 양측 계약 일치 확인(iss/aud/role/exp/secret), 운영 도메인에서 operator·admin·super_admin 3종 진입 + 거부 경로(만료·aud·키·무쿠키) 전부 검증 통과.
+
 | 경로 | 함수 | 역할 |
 |---|---|---|
 | `GET /api/sso/enter?t=<JWT>` | `sso-enter.js` | 허브 토큰 검증(서명·만료·iss·aud 전부) → SI 관리자 upsert → 세션 쿠키 발급 → `/admin` 302. 실패 시 허브로 302 |
