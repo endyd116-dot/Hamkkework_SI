@@ -311,6 +311,12 @@ $('#exportBtn')?.addEventListener('click', () => {
      3) 세션 없음 + 운영 → 허브 관리자 페이지로 되돌림
    ============================================================ */
 (async function boot() {
+  // 허브 토큰(t)이 진입 리다이렉트로 주소창에 남았으면 즉시 제거 (히스토리·로그 노출 방지)
+  // — 세션 쿠키는 이미 발급된 상태이므로 토큰은 더 이상 필요 없음
+  if (new URLSearchParams(location.search).has('t')) {
+    history.replaceState(null, '', location.pathname + location.hash);
+  }
+
   const sess = await fetchSsoSession();
 
   if (sess) {
