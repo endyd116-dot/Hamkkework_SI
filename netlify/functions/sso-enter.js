@@ -17,7 +17,16 @@ import {
 } from './_lib/sso.js';
 
 const STORE_NAME = 'hamkkework';
-const ADMIN_HOME = '/admin#dashboard';
+const ADMIN_PATH = '/admin#dashboard';
+
+// 관리자 홈 절대 URL — https 강제.
+// (Netlify 가 상대경로 Location 을 내부 스킴(http)으로 절대화해 http 로 떨어지는 문제 방지.
+//  운영은 무조건 https, localhost 개발만 http 유지.)
+function adminHomeUrl(req) {
+  const host = req.headers.get('x-forwarded-host') || req.headers.get('host') || 'siax.tbfa.co.kr';
+  const isLocal = /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i.test(host);
+  return `${isLocal ? 'http' : 'https'}://${host}${ADMIN_PATH}`;
+}
 
 export default async (req) => {
   const token = new URL(req.url).searchParams.get('t') || '';
@@ -69,5 +78,5 @@ export default async (req) => {
   );
 
   console.log('[sso-enter] 진입 성공:', JSON.stringify({ sub, role }));
-  return redirect(ADMIN_HOME, { 'Set-Cookie': buildSessionCookie(sessionJwt) });
+  return redirect(adminHomeUrl(req), { 'Set-Cookie': buildSessionCookie(sessionJwt) });
 };
