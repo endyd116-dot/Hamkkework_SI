@@ -30,9 +30,21 @@
   [headers.values]
     Cache-Control = "public, max-age=300"
 
-# 내부 문서(.md: HANDOFF/README/STANDARDS 등) 공개 노출 차단 → 홈으로
+# 내부 문서 공개 노출 차단 → 홈으로 (force=true 로 실제 파일보다 우선)
 [[redirects]]
-  from = "/*.md"
+  from = "/HANDOFF.md"
+  to = "/"
+  status = 301
+  force = true
+
+[[redirects]]
+  from = "/README.md"
+  to = "/"
+  status = 301
+  force = true
+
+[[redirects]]
+  from = "/STANDARDS.md"
   to = "/"
   status = 301
   force = true
