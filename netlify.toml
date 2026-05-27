@@ -30,6 +30,33 @@
   [headers.values]
     Cache-Control = "public, max-age=300"
 
+# HTML 페이지는 캐시 금지 — 스테일 http 페이지가 브라우저에 남는 문제 원천 차단
+# (assets 는 위 규칙대로 계속 캐시. 아래는 페이지 경로만.)
+[[headers]]
+  for = "/*.html"
+  [headers.values]
+    Cache-Control = "no-store"
+
+[[headers]]
+  for = "/"
+  [headers.values]
+    Cache-Control = "no-store"
+
+[[headers]]
+  for = "/admin"
+  [headers.values]
+    Cache-Control = "no-store"
+
+[[headers]]
+  for = "/portal"
+  [headers.values]
+    Cache-Control = "no-store"
+
+[[headers]]
+  for = "/blog"
+  [headers.values]
+    Cache-Control = "no-store"
+
 # 내부 문서 공개 노출 차단 → 홈으로 (force=true 로 실제 파일보다 우선)
 [[redirects]]
   from = "/HANDOFF.md"
