@@ -30,6 +30,13 @@
   [headers.values]
     Cache-Control = "public, max-age=300"
 
+# 내부 문서(.md: HANDOFF/README/STANDARDS 등) 공개 노출 차단 → 홈으로
+[[redirects]]
+  from = "/*.md"
+  to = "/"
+  status = 301
+  force = true
+
 [[redirects]]
   from = "/api/calendar.ics"
   to = "/.netlify/functions/calendar"
