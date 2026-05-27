@@ -10,6 +10,68 @@ import { initAdminNotifications, requestNotifyPermission, notifyPermissionState 
 await ensureSeed();
 
 /* ============================================================
+   허브 SSO(SP) — 세션 게이트 + 3단 권한 (SI 자체 정의)
+   - 진입은 허브 카드 → /api/sso/enter 가 SI 세션 쿠키(httpOnly)를 발급.
+   - 이 페이지는 부팅 시 /api/sso/session 으로 세션을 확인한다.
+   - 권한은 SI 세션 role 로만 분기한다 (허브 권한 DB 미조회 — 결합 금지).
+   ============================================================ */
+const HUB_ADMIN_URL = 'https://tbfa.co.kr/admin-hub.html';
+
+// 등급 서열 — 상위 등급은 하위 권한을 포함
+const ROLE_RANK = { operator: 1, admin: 2, super_admin: 3 };
+
+// 메뉴별 최소 접근 등급 (SI 기능→등급 매핑)
+//   operator   = 조회·접수처리  → 대시보드·리드(접수처리)·캘린더·KPI·AI분석
+//   admin      = 일반관리       → + 견적·프로젝트·결제·케이스·블로그·FAQ·챗봇·지식·자동화·답변생성·포털
+//   super_admin= 삭제·설정       → + 설정 + 전체 백업
+const VIEW_MIN_ROLE = {
+  dashboard: 'operator', leads: 'operator', calendar: 'operator',
+  kpi: 'operator', analytics: 'operator',
+  quotes: 'admin', projects: 'admin', invoices: 'admin',
+  cases: 'admin', blog: 'admin', faqs: 'admin',
+  chatbot: 'admin', knowledge: 'admin', automation: 'admin',
+  quoteResponder: 'admin', portal: 'admin',
+  settings: 'super_admin',
+};
+
+const roleRank = (r) => ROLE_RANK[r] || 0;
+const isSsoRole = (r) => !!ROLE_RANK[r];
+const canView = (view, role) => roleRank(role) >= roleRank(VIEW_MIN_ROLE[view] || 'admin');
+
+// 뷰/액션 단위 권한 확인용 — admin-views 등에서 window.siCan('super_admin') 형태로 사용
+window.siRole = () => store.auth.get()?.role || '';
+window.siCan = (minRole) => {
+  const r = window.siRole();
+  return isSsoRole(r) ? roleRank(r) >= roleRank(minRole) : true; // 비-SSO(로컬) 세션은 전체 허용
+};
+
+function isLocalhost() {
+  const h = location.hostname;
+  return h === 'localhost' || h === '127.0.0.1' || h === '::1' || h.endsWith('.local');
+}
+
+async function fetchSsoSession() {
+  try {
+    const r = await fetch('/api/sso/session', { headers: { Accept: 'application/json' }, cache: 'no-store' });
+    if (!r.ok) return null;
+    const d = await r.json();
+    return d && d.ok ? d : null;
+  } catch {
+    return null; // 네트워크 오류는 세션 없음으로 취급
+  }
+}
+
+// 권한 등급에 따라 사이드바·백업 버튼 노출 조정 (디자인 유지 — 항목만 비표시)
+function applyRoleGating(role) {
+  document.body.setAttribute('data-role', role);
+  $$('.sidebar-link[data-view]').forEach((a) => {
+    a.style.display = canView(a.dataset.view, role) ? '' : 'none';
+  });
+  const exp = $('#exportBtn'); // 전체 데이터 백업 = 최고관리자만
+  if (exp) exp.style.display = roleRank(role) >= roleRank('super_admin') ? '' : 'none';
+}
+
+/* ============================================================
    Auth — adminCredentials store에서 계정 읽어 SHA-256 hash 검증
    - 시드 직후엔 DEMO_ACCOUNT (endyd116@gmail.com / hamkke2026)
    - 어드민 페이지에서 비밀번호·이름·이메일 변경 가능
@@ -95,6 +157,13 @@ $('#loginForm')?.addEventListener('submit', async (e) => {
 });
 
 $('#logoutBtn')?.addEventListener('click', () => {
+  const a = store.auth.get();
+  if (a?.via === 'sso') {
+    if (!window.confirm('로그아웃 하시겠습니까? 허브로 이동합니다.')) return;
+    store.auth.clear();
+    window.location.href = '/api/sso/logout'; // 세션 쿠키 만료 + 허브로 302
+    return;
+  }
   if (!window.confirm('로그아웃 하시겠습니까?')) return;
   store.auth.clear();
   showLogin();
@@ -127,6 +196,14 @@ let currentView = 'dashboard';
 
 function navTo(view) {
   if (!VIEW_FNS[view]) view = 'dashboard';
+
+  // 3단 권한 게이트 — SSO 세션일 때만 적용(로컬/데모 세션은 전체 접근)
+  const role = store.auth.get()?.role;
+  if (isSsoRole(role) && !canView(view, role)) {
+    toast('이 메뉴에 접근할 권한이 없습니다.', 'error');
+    view = 'dashboard';
+  }
+
   currentView = view;
 
   // update sidebar
@@ -228,12 +305,42 @@ $('#exportBtn')?.addEventListener('click', () => {
 });
 
 /* ============================================================
-   Boot
+   Boot — 허브 SSO 세션 게이트
+     1) /api/sso/session 으로 SI 세션 확인 → 유효하면 권한 적용 후 진입
+     2) 세션 없음 + 로컬 개발 → 기존 비밀번호 로그인 유지(개발/테스트용)
+     3) 세션 없음 + 운영 → 허브 관리자 페이지로 되돌림
    ============================================================ */
-if (isAuthed()) {
-  showAdmin();
-  const initial = (location.hash || '#dashboard').slice(1);
-  navTo(initial);
-} else {
-  showLogin();
-}
+(async function boot() {
+  const sess = await fetchSsoSession();
+
+  if (sess) {
+    store.auth.set({
+      email: sess.email,
+      name: sess.name || '관리자',
+      role: sess.role,
+      sub: sess.sub,
+      via: 'sso',
+      at: new Date().toISOString(),
+    });
+    applyRoleGating(sess.role);
+    showAdmin();
+    let initial = (location.hash || '#dashboard').slice(1);
+    if (!canView(initial, sess.role)) initial = 'dashboard';
+    navTo(initial);
+    return;
+  }
+
+  if (isLocalhost()) {
+    // 로컬 개발: 허브가 없으므로 기존 데모 로그인 폼 유지
+    if (isAuthed()) {
+      showAdmin();
+      navTo((location.hash || '#dashboard').slice(1));
+    } else {
+      showLogin();
+    }
+    return;
+  }
+
+  // 운영: SI 세션 없으면 진입 차단 → 허브로 되돌림
+  window.location.replace(HUB_ADMIN_URL);
+})();

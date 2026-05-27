@@ -84,6 +84,8 @@ HamkkeWorkSi/
 | `GEMINI_MONTHLY_BUDGET_USD` | 월 한도 (정보 표시) | `50` |
 | `RESEND_API_KEY` | (선택) 이메일 발송 | — |
 | `EMAIL_TO` | (선택) 알림 수신 | `endy116@naver.com` |
+| `SIAX_SSO_SECRET` | **허브 SSO 필수** — 허브와 동일 값(HS256 서명키). Swain이 양쪽 등록 | — |
+| `SIAX_SESSION_SECRET` | (선택) SI 세션 독립 서명키. 미설정 시 SSO 키에서 단방향 파생 | (파생) |
 
 설정 변경:
 ```bash
@@ -172,6 +174,27 @@ netlify deploy --prod --dir .
   - 시간대 히트맵 (24h × 7day)
   - 상위 첫 질문 TOP 10 + 키워드 TOP 20
 - **결정**: 50+ 세션 후 우세한 쪽으로 통일하려면 `pickVariant()` 수정
+
+## 🔐 허브 SSO 연동 (SP) + 3단 권한
+
+허브(SIREN/tbfa.co.kr)가 IdP로 단일로그인 토큰을 발급하고, SI는 SP로 검증해 자체 세션을 발급한다.
+허브 관리자가 허브의 "④ 함께워크_SI" 카드를 클릭하면 SI 관리자로 바로 진입한다. **SI 별도 로그인 없음.**
+
+| 경로 | 함수 | 역할 |
+|---|---|---|
+| `GET /api/sso/enter?t=<JWT>` | `sso-enter.js` | 허브 토큰 검증(서명·만료·iss·aud 전부) → SI 관리자 upsert → 세션 쿠키 발급 → `/admin` 302. 실패 시 허브로 302 |
+| `GET /api/sso/session` | `sso-session.js` | 관리자 페이지 부팅 시 호출. httpOnly 세션 쿠키 검증 → 신원/권한 JSON |
+| `GET /api/sso/logout` | `sso-logout.js` | 세션 쿠키 만료 → 허브 관리자 페이지로 302 |
+
+- **JWT 검증/발급**: 외부 라이브러리 없이 `_lib/sso.js`가 Node 내장 `crypto`로 HS256 처리 (이 프로젝트는 빌드/설치 단계가 없으므로). 허브가 어떤 라이브러리로 서명하든 HS256 표준 포맷이라 호환.
+- **SI 세션 쿠키**: `siax_session` — HttpOnly · Secure · SameSite=Lax · host-only(Domain 미지정 → siax.tbfa.co.kr 한정, 허브와 격리) · 만료 2h. 서명키는 SI 자체(허브 키와 분리).
+- **3단 권한 매핑** (SI 자체 정의, 허브 권한 DB 미조회 — [admin.js](assets/js/admin.js) `VIEW_MIN_ROLE`):
+  - `operator` (조회·접수처리) → 대시보드 · 리드 · 캘린더 · KPI · AI분석
+  - `admin` (일반관리) → + 견적 · 프로젝트 · 결제 · 케이스 · 블로그 · FAQ · 챗봇 · 지식 · 자동화 · 답변생성 · 포털
+  - `super_admin` (삭제·설정) → + 설정 + 전체 백업
+  - 권한 밖 메뉴는 사이드바에서 숨김 + `navTo` 차단. 액션 단위는 `window.siCan('super_admin')`로 확장 가능.
+- **게이트 동작**: 관리자 페이지 부팅 시 세션 확인 → 유효하면 진입, **운영 환경에서 세션 없으면 허브(`admin-hub.html`)로 되돌림**. localhost는 기존 데모 로그인 유지(개발용). 사용자 페이지(index/portal/blog)는 공개 유지.
+- **배포**: SI는 기존 Netlify 사이트 그대로. Swain이 `siax.tbfa.co.kr`를 custom domain으로 추가(SSL 자동), `SIAX_SSO_SECRET` 등록(허브와 동일 값).
 
 ## ⚙️ 자주 쓰는 명령어
 

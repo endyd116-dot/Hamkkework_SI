@@ -35,6 +35,22 @@
   to = "/.netlify/functions/calendar"
   status = 200
 
+# 허브 SSO(SP) — 계약 경로를 평탄한 함수명으로 매핑 (catch-all 보다 먼저 평가)
+[[redirects]]
+  from = "/api/sso/enter"
+  to = "/.netlify/functions/sso-enter"
+  status = 200
+
+[[redirects]]
+  from = "/api/sso/session"
+  to = "/.netlify/functions/sso-session"
+  status = 200
+
+[[redirects]]
+  from = "/api/sso/logout"
+  to = "/.netlify/functions/sso-logout"
+  status = 200
+
 [[redirects]]
   from = "/api/*"
   to = "/.netlify/functions/:splat"
