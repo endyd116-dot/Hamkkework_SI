@@ -3,4 +3,4 @@ Allow: /
 Disallow: /admin
 Disallow: /portal
 
-Sitemap: https://hamkkework.com/sitemap.xml
+Sitemap: https://siax.tbfa.co.kr/sitemap.xml
