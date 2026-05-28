@@ -198,6 +198,16 @@ netlify deploy --prod --dir .
 - **게이트 동작**: 관리자 페이지 부팅 시 세션 확인 → 유효하면 진입, **운영 환경에서 세션 없으면 허브(`admin-hub.html`)로 되돌림**. localhost는 기존 데모 로그인 유지(개발용). 사용자 페이지(index/portal/blog)는 공개 유지.
 - **배포**: SI는 기존 Netlify 사이트 그대로. Swain이 `siax.tbfa.co.kr`를 custom domain으로 추가(SSL 자동), `SIAX_SSO_SECRET` 등록(허브와 동일 값).
 
+## 🔎 SEO (siax.tbfa.co.kr)
+
+> **상태(2026-05-28): SI 검색 등록 완료.** 구글 Search Console · 네이버 서치어드바이저 양쪽 모두 소유확인 + `sitemap.xml` 제출 완료, 홈 색인 생성 요청 완료. 색인은 자동 진행 — 최초 검색노출까지 보통 1~7일(신생 도메인 기준).
+
+- **코드 측 영구 반영**: title · description · OG (canonical · og:url · 절대 og:image) · JSON-LD(Organization) · `google-site-verification` · `naver-site-verification` · `robots.txt`(siax 도메인 정정 + `/admin`·`/portal` 차단) · `sitemap.xml`(/, /blog).
+- **펜딩 작업** (PM이 시작 신호 주면 진행):
+  - **MIS** (`tbfa.co.kr`, 교사유가족협의회): robots.txt·sitemap.xml 없음, OG 없음, admin noindex 미확인 → 보강 필요. tbfa-mis 레포 접근 가능, 배포는 MIS 파이프라인.
+  - **ON** (`hamkkework-on.netlify.app`): 전체 noindex(BETA 의도 추정). 정식 오픈 시 noindex 해제 + 커스텀 도메인 + 메타 보강. 레포 위치 필요.
+- **추가 SEO 가속 옵션** (선택): `/blog` URL도 GSC에서 색인 생성 요청, 네이버 "웹페이지 수집"으로 홈 수집요청.
+
 ## ⚙️ 자주 쓰는 명령어
 
 ```powershell
